@@ -1,0 +1,14 @@
+langchain>=0.1.5
+langchain-openai>=0.0.5
+langchain-experimental>=0.0.51
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0.0
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pandas>=2.1.4
+numpy>=1.26.2
+requests>=2.31.0
+openpyxl>=3.1.2
+xlrd>=2.0.1 
