@@ -12,14 +12,25 @@ from langchain.agents.agent_types import AgentType
 from sqlalchemy import create_engine
 from schemas import ChartDataPoint, TimeSeriesDataPoint, TableData, QueryResponse
 from sqlalchemy.sql import text
+import oracledb
 
 load_dotenv()
 
 class SQLAgentService:
     def __init__(self, database_url=None):
-        self.database_url = database_url or os.getenv('DATABASE_URL')
-        if not self.database_url:
-            self.database_url = self._build_database_url()
+        # Oracle connection configuration
+        self.official_tns = """(DESCRIPTION=(ADDRESS_LIST=(FAILOVER=ON)(LOAD_BALANCE=ON)(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=ruhmpp-exa-scan.momra.net)(PORT=1521)))(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=drmpp-exa-scan.momra.net)(PORT=1521))))(CONNECT_DATA=(SERVICE_NAME=MEDIUM_AIDBPRO.momra.net)(FAILOVER_MODE=(TYPE=select)(METHOD=basic))))"""
+        self.db_user = os.getenv('DB_USER', 'AI_READ')
+        self.db_password = os.getenv('DB_PASSWORD', 'Ai2025aI')
+        
+        # Materialized views available
+        self.materialized_views = [
+            "AI_USER.COMMERCIAL_LICENSE_MV",
+            "AI_USER.COM_LIC_ADDITIONAL_ACTIVITY_MV", 
+            "AI_USER.COM_REQUESTS_COMPLETE_MV"
+        ]
+        
+        self.database_url = database_url or self._build_oracle_url()
         
         self.llm = AzureChatOpenAI(
             azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
@@ -31,46 +42,55 @@ class SQLAgentService:
         
         self.db = None
         self.agent_executor = None
-        self.table_name = "commercial"  
+        self.main_table = "AI_USER.COMMERCIAL_LICENSE_MV"  # Primary table for commercial data
         self._setup_database_connection()
         self._create_agent()
     
-    def _build_database_url(self):
-        host = os.getenv('DB_HOST', 'localhost')
-        port = os.getenv('DB_PORT', '5432')
-        database = os.getenv('DB_NAME')
-        username = os.getenv('DB_USER')
-        password = os.getenv('DB_PASSWORD')
-        
-        if not all([database, username, password]):
-            raise ValueError("Database credentials not found in environment variables")
-        
-        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
+    def _build_oracle_url(self):
+        # Create Oracle connection URL for SQLAlchemy
+        return f"oracle+oracledb://{self.db_user}:{self.db_password}@{self.official_tns}"
     
     def _setup_database_connection(self):
         try:
             engine = create_engine(self.database_url)
-            self.db = SQLDatabase(engine, include_tables=['commercial'])
+            # Include all materialized views in the database connection
+            self.db = SQLDatabase(engine, include_tables=self.materialized_views)
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to database: {str(e)}")
+            raise ConnectionError(f"Failed to connect to Oracle database: {str(e)}")
     
     def _create_agent(self):
-        commercial_schema = self.get_table_schema(self.table_name)
+        # Get schema for primary commercial table
+        commercial_schema = self.get_table_schema(self.main_table)
+        
+        # Get schemas for all available materialized views
+        all_schemas = ""
+        for mv in self.materialized_views:
+            mv_schema = self.get_table_schema(mv)
+            all_schemas += f"\n{mv_schema}\n"
         
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
         
-        system_message = f"""You are a SQL expert specialized in analyzing commercial licensing data. 
+        system_message = f"""You are a SQL expert specialized in analyzing commercial licensing data from Oracle materialized views.
 
 IMPORTANT RESTRICTIONS:
-- You can ONLY query the 'commercial' table
+- You can ONLY query these materialized views: {', '.join(self.materialized_views)}
 - You cannot access any other tables in the database
-- All queries must be SELECT statements on the commercial table only
+- All queries must be SELECT statements on these materialized views only
+- Use Oracle SQL syntax
 
-COMMERCIAL TABLE SCHEMA:
-{commercial_schema}
+AVAILABLE MATERIALIZED VIEWS:
+{all_schemas}
+
+PRIMARY TABLE FOR MOST QUERIES: {self.main_table}
+- This contains the main commercial licensing data
+- Use this for most general commercial license questions
+
+ADDITIONAL TABLES:
+- AI_USER.COM_LIC_ADDITIONAL_ACTIVITY_MV: Additional activities data
+- AI_USER.COM_REQUESTS_COMPLETE_MV: Complete request information
 
 When asked questions about data, you should:
-1. Generate the appropriate SQL query for the 'commercial' table ONLY
+1. Generate the appropriate Oracle SQL query for the relevant materialized view(s)
 2. Execute it against the database
 3. Always include the actual SQL query in your response using the format: ```sql\n[SQL_QUERY]\n```
 4. Provide meaningful insights from the commercial data
@@ -81,6 +101,12 @@ Focus on commercial licensing insights such as:
 - Geographic insights
 - Timeline analysis
 - Status and category breakdowns
+
+ORACLE SQL SPECIFIC NOTES:
+- Use Oracle date functions (TO_DATE, TRUNC, etc.)
+- Use Oracle-specific syntax for date operations
+- Use ROWNUM for limiting results instead of LIMIT
+- Use NVL for null handling
 
 Always format your response to include the SQL query even if you execute it successfully."""
         
@@ -98,6 +124,14 @@ Always format your response to include the SQL query even if you execute it succ
     def _detect_chart_type(self, df: pd.DataFrame, question: str) -> str:
         question_lower = question.lower()
         
+        if len(df.columns) == 1 and len(df) == 1:
+            count_keywords = ['count', 'total', 'number', 'how many', 'عدد', 'إجمالي', 'كم', 'مجموع']
+            if any(word in question_lower for word in count_keywords):
+                return "insight"
+        
+        if len(df.columns) == 1:
+            return "insight"
+        
         trend_keywords = ['trend', 'over time', 'timeline', 'monthly', 'daily', 'yearly', 'اتجاه', 'مع الوقت', 'شهريا', 'سنويا', 'تطور']
         percentage_keywords = ['percentage', 'proportion', 'share', 'distribution', 'نسبة', 'توزيع', 'حصة']
         comparison_keywords = ['compare', 'comparison', 'top', 'highest', 'lowest', 'مقارنة', 'أعلى', 'أقل', 'الأكثر', 'الأقل']
@@ -114,6 +148,14 @@ Always format your response to include the SQL query even if you execute it succ
             return "bar"
     
     def _format_for_chart(self, df: pd.DataFrame, chart_type: str) -> Union[List[ChartDataPoint], List[TimeSeriesDataPoint], TableData]:
+        # Handle insight type for single values
+        if chart_type == "insight":
+            # For insight type, return the data in table format for easy extraction
+            return TableData(
+                columns=df.columns.tolist(),
+                rows=df.values.tolist()
+            )
+        
         if chart_type == "table":
             return TableData(
                 columns=df.columns.tolist(),
@@ -121,7 +163,11 @@ Always format your response to include the SQL query even if you execute it succ
             )
         
         if len(df.columns) < 2:
-            raise ValueError("Data must have at least 2 columns for chart visualization")
+            # If we have less than 2 columns but chart_type is not insight, convert to table
+            return TableData(
+                columns=df.columns.tolist(),
+                rows=df.values.tolist()
+            )
         
         if chart_type == "line" and any(col.lower() in ['date', 'time', 'timestamp', 'created_at', 'updated_at'] for col in df.columns):
             time_col = None
@@ -200,63 +246,61 @@ Always format your response to include the SQL query even if you execute it succ
     
     async def query(self, question: str, chart_type: str = "auto") -> QueryResponse:
         try:
-            schema_info = self.get_table_schema(self.table_name)
+            schema_info = self.get_table_schema(self.main_table)
             
-            prompt = f"""You are a SQL expert analyzing commercial licensing data. Given the database schema and a question, generate ONLY the SQL query.
+            prompt = f"""You are a SQL expert analyzing commercial licensing data from Oracle materialized views. Given the database schema and a question, generate ONLY the SQL query.
 
-Database Schema for 'commercial' table:
+Database Schema for '{self.main_table}':
 {schema_info}
 
-COLUMN UNDERSTANDING:
-- g_issue_date: Issue dates (PRIMARY date column for issue analysis)
-- g_expiration_date: Expiration dates (PRIMARY date column for expiration analysis)  
-- issue_date, expiration_date: Secondary date columns (usually avoid these, prefer g_* versions)
-- region_nmae: Region names
-- isic_desc: Business type descriptions  
-- lic_status: License status (analyze the actual values to understand active/inactive)
-- baladia_name, amana_name, city_name: Geographic hierarchy
-- shop_area: Numeric area measurements
-- original_id: Original system ID
+COLUMN UNDERSTANDING FOR ORACLE MATERIALIZED VIEWS:
+- Use actual column names from the materialized view schema
+- For date operations, use Oracle functions: TO_DATE, TRUNC, SYSDATE, etc.
+- For limiting results, use ROWNUM instead of LIMIT
+- For null handling, use NVL or NVL2
 
 INTELLIGENT ANALYSIS APPROACH:
 - When asked about "active vs expired/inactive", analyze based on:
-  1. Current lic_status values AND/OR
-  2. Compare g_expiration_date with CURRENT_DATE
+  1. Current license status values AND/OR
+  2. Compare expiration dates with SYSDATE
   3. Use the data to determine what constitutes "active" vs "expired"
-- For status analysis, examine actual lic_status values in the data
-- For geographic analysis, choose appropriate level (region/city/baladia)
-- For business analysis, use isic_desc for business types
-- For temporal analysis, use g_issue_date as primary time dimension
+- For status analysis, examine actual status values in the data
+- For geographic analysis, choose appropriate geographic columns
+- For business analysis, use business type/category columns
+- For temporal analysis, use appropriate date columns
 
 ARABIC/MULTILINGUAL SUPPORT:
 - Understand questions in Arabic and English
 - Map Arabic business concepts to appropriate columns:
-  - تاريخ/dates → g_issue_date, g_expiration_date
-  - منطقة/region → region_nmae  
-  - نشاط/business → isic_desc
-  - حالة/status → lic_status
-  - مدينة/city → city_name, baladia_name
-  - فعال/active → determine from lic_status and/or dates
-  - منتهي/expired → determine from lic_status and/or dates
+  - تاريخ/dates → date columns
+  - منطقة/region → region/geographic columns
+  - نشاط/business → business type columns
+  - حالة/status → status columns
+  - مدينة/city → city/location columns
+  - فعال/active → determine from status and/or dates
+  - منتهي/expired → determine from status and/or dates
 
-SMART QUERY CONSTRUCTION:
-1. Always return at least 2 columns for visualization
-2. Use meaningful column aliases (e.g., 'license_count', 'status_type')
-3. For status breakdowns, use CASE statements with descriptive labels
-4. For counts, include category labels not just numbers
-5. Group and order results logically
-6. Use appropriate date functions for time analysis
+ORACLE SQL SPECIFIC REQUIREMENTS:
+1. Use ROWNUM for limiting: WHERE ROWNUM <= 10
+2. Use Oracle date functions: TRUNC(date_column), TO_CHAR(date_column, 'YYYY-MM')
+3. Use NVL for null handling: NVL(column, 'default_value')
+4. For date comparisons: date_column >= SYSDATE or date_column < SYSDATE
+5. Always return at least 2 columns for visualization
+6. Use meaningful column aliases (e.g., 'license_count', 'status_type')
+7. For status breakdowns, use CASE statements with descriptive labels
+8. For counts, include category labels not just numbers
+9. Group and order results logically
 
 Question: {question}
 
 CONSTRAINTS:
-- Query 'commercial' table ONLY
+- Query '{self.main_table}' materialized view ONLY
 - Generate SELECT statements only
+- Use Oracle SQL syntax
 - Use column names exactly as they appear in schema
-- Prefer g_issue_date and g_expiration_date for date operations
 - Return results suitable for chart visualization (2+ columns)
 
-Generate the SQL query that best answers this question:"""
+Generate the Oracle SQL query that best answers this question:"""
 
             sql_response = self.llm.invoke(prompt)
             sql_query = sql_response.content.strip()
@@ -268,7 +312,7 @@ Generate the SQL query that best answers this question:"""
             sql_query = re.sub(r'\s*```$', '', sql_query)
             sql_query = sql_query.strip()
             
-            # Security check: ensure query only contains SELECT and references commercial table
+            # Security check: ensure query only contains SELECT and references materialized views
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
                 return QueryResponse(
                     success=False,
@@ -279,18 +323,20 @@ Generate the SQL query that best answers this question:"""
                     error="Query must be a SELECT statement"
                 )
             
-            # Ensure query only references the commercial table
-            if 'commercial' not in sql_query.lower():
+            # Ensure query only references allowed materialized views
+            query_lower = sql_query.lower()
+            mv_referenced = any(mv.lower() in query_lower for mv in self.materialized_views)
+            if not mv_referenced:
                 return QueryResponse(
                     success=False,
                     data=None,
                     chart_type="table",
                     insights=None,
-                    message="Query must reference the commercial table",
-                    error="Query does not reference the commercial table"
+                    message="Query must reference one of the allowed materialized views",
+                    error=f"Query does not reference any of: {', '.join(self.materialized_views)}"
                 )
             
-            print(f"Debug - Generated SQL: {sql_query}")
+            print(f"Debug - Generated Oracle SQL: {sql_query}")
             
             try:
                 df = pd.read_sql(sql_query, self.db._engine)
@@ -301,8 +347,8 @@ Generate the SQL query that best answers this question:"""
                         success=True,
                         data=None,
                         chart_type="table",
-                        insights="No data found matching the query criteria. This could indicate that the specified conditions don't match any records in the database.",
-                        message="Query executed successfully but returned no data",
+                        insights="No data available for this question. The query executed successfully but found no records matching the specified criteria in the database.",
+                        message="No data available for this question",
                         error=None
                     )
                 
@@ -326,13 +372,13 @@ Generate the SQL query that best answers this question:"""
                 )
                 
             except Exception as data_error:
-                print(f"Debug - Data processing error: {str(data_error)}")
+                print(f"Debug - Oracle data processing error: {str(data_error)}")
                 return QueryResponse(
                     success=False,
                     data=None,
                     chart_type="table",
                     insights=None,
-                    message="Failed to process query results",
+                    message="Failed to process Oracle query results",
                     error=str(data_error)
                 )
                 
@@ -343,13 +389,17 @@ Generate the SQL query that best answers this question:"""
                 data=None,
                 chart_type="table",
                 insights=None,
-                message="Failed to generate SQL query",
+                message="Failed to generate Oracle SQL query",
                 error=str(e)
             )
     
     def _generate_insights(self, df: pd.DataFrame, chart_type: str, question: str) -> str:
         """Generate AI insights about the data and chart"""
         try:
+            # Handle empty data case
+            if df.empty:
+                return "No data available for this question. The query executed successfully but found no records matching the specified criteria in the database."
+            
             # Prepare data summary for insights
             data_summary = f"Data contains {len(df)} records with {len(df.columns)} columns. "
             
@@ -372,6 +422,12 @@ Generate the SQL query that best answers this question:"""
                         top_value = df[numeric_cols[0]].max()
                         data_summary += f"Highest value: {top_category} with {top_value:,.0f}. "
             
+            # Handle single value responses (insight type)
+            if chart_type == "insight" and len(df) == 1 and len(df.columns) == 1:
+                value = df.iloc[0, 0]
+                col_name = df.columns[0]
+                return f"The result is {value:,} for {col_name}. This represents the total count or value for your query about the commercial licensing data."
+            
             insights_prompt = f"""Based on the commercial licensing data analysis, provide concise and meaningful insights about the results:
 
 Question Asked: {question}
@@ -393,44 +449,81 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
             return insights_response.content.strip()
             
         except Exception as e:
+            if df.empty:
+                return "No data available for this question. The query executed successfully but found no records matching the specified criteria in the database."
             return f"Data shows {len(df)} records. Chart type '{chart_type}' is suitable for visualizing this data distribution."
     
     def get_table_schema(self, table_name: str) -> str:
-        """Get detailed schema information for a specific table"""
+        """Get detailed schema information for a specific Oracle materialized view"""
         try:
             return self.db.get_table_info_no_throw([table_name])
         except:
             try:
+                # Oracle-specific schema query for materialized views
                 with self.db._engine.connect() as conn:
+                    # Parse schema and table name from full name (e.g., AI_USER.COMMERCIAL_LICENSE_MV)
+                    if '.' in table_name:
+                        schema, table = table_name.split('.', 1)
+                    else:
+                        schema = 'AI_USER'
+                        table = table_name
+                    
                     result = conn.execute(text(f"""
                         SELECT 
-                            column_name,
-                            data_type,
-                            is_nullable,
-                            column_default
-                        FROM information_schema.columns 
-                        WHERE table_name = '{table_name}' 
-                        ORDER BY ordinal_position
+                            COLUMN_NAME,
+                            DATA_TYPE,
+                            DATA_LENGTH,
+                            DATA_PRECISION,
+                            DATA_SCALE,
+                            NULLABLE,
+                            DATA_DEFAULT
+                        FROM ALL_TAB_COLUMNS 
+                        WHERE OWNER = '{schema}' 
+                        AND TABLE_NAME = '{table}'
+                        ORDER BY COLUMN_ID
                     """))
                     columns = result.fetchall()
                     
-                    schema_info = f"Table: {table_name}\nColumns:\n"
-                    for col_name, data_type, is_nullable, default in columns:
-                        nullable = "NULL" if is_nullable == "YES" else "NOT NULL"
+                    if not columns:
+                        return f"Materialized View: {table_name}\nError: No columns found or access denied"
+                    
+                    schema_info = f"Materialized View: {table_name}\nColumns:\n"
+                    for col_name, data_type, data_length, data_precision, data_scale, nullable, default in columns:
+                        # Format data type with length/precision
+                        if data_type in ['VARCHAR2', 'CHAR'] and data_length:
+                            type_info = f"{data_type}({data_length})"
+                        elif data_type == 'NUMBER' and data_precision:
+                            if data_scale and data_scale > 0:
+                                type_info = f"{data_type}({data_precision},{data_scale})"
+                            else:
+                                type_info = f"{data_type}({data_precision})"
+                        else:
+                            type_info = data_type
+                        
+                        nullable_info = "NULL" if nullable == "Y" else "NOT NULL"
                         default_info = f" DEFAULT {default}" if default else ""
-                        schema_info += f"  - {col_name}: {data_type} {nullable}{default_info}\n"
+                        schema_info += f"  - {col_name}: {type_info} {nullable_info}{default_info}\n"
+                    
+                    # Add row count information
+                    try:
+                        count_result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                        row_count = count_result.fetchone()[0]
+                        schema_info += f"\nRow Count: {row_count:,}\n"
+                    except:
+                        schema_info += f"\nRow Count: Unable to retrieve\n"
                     
                     return schema_info
             except Exception as e:
-                return f"Table: {table_name}\nError getting schema: {str(e)}"
+                return f"Materialized View: {table_name}\nError getting schema: {str(e)}"
     
     def get_database_info(self) -> Dict[str, Any]:
-        tables = self.db.get_usable_table_names()
+        """Get information about all available materialized views"""
+        tables = self.materialized_views
         table_schemas = {}
         
         for table in tables:
             try:
-                schema_info = self.db.get_table_info_no_throw([table])
+                schema_info = self.get_table_schema(table)
                 table_schemas[table] = schema_info
             except Exception:
                 table_schemas[table] = "Schema information not available"
@@ -438,4 +531,27 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
         return {
             "tables": tables,
             "table_schemas": table_schemas
-        } 
+        }
+    
+    def test_oracle_connection(self) -> bool:
+        """Test Oracle database connection and materialized view access"""
+        try:
+            with self.db._engine.connect() as conn:
+                # Test basic connection
+                result = conn.execute(text("SELECT SYSDATE FROM DUAL"))
+                sysdate = result.fetchone()
+                print(f"✅ Oracle connection successful. Current time: {sysdate[0]}")
+                
+                # Test each materialized view
+                for mv_name in self.materialized_views:
+                    try:
+                        result = conn.execute(text(f"SELECT COUNT(*) FROM {mv_name}"))
+                        count = result.fetchone()[0]
+                        print(f"✅ {mv_name}: {count:,} rows")
+                    except Exception as e:
+                        print(f"❌ {mv_name}: Error - {str(e)}")
+                
+                return True
+        except Exception as e:
+            print(f"❌ Oracle connection failed: {str(e)}")
+            return False 

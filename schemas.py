@@ -18,7 +18,7 @@ class TableData(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str = Field(..., description="Natural language question about the data")
-    chart_type: Optional[str] = Field("auto", description="Preferred chart type: bar, line, pie, table, auto")
+    chart_type: Optional[str] = Field("auto", description="Preferred chart type: bar, line, pie, table, insight, auto")
 
 class QueryResponse(BaseModel):
     success: bool = Field(..., description="Whether the query was successful")

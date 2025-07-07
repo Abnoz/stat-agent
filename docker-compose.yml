@@ -1,73 +1,46 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: commercial_license_db
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_DB: commercial_licenses
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
-    networks:
-      - commercial_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   backend:
     build: .
     container_name: commercial_license_api
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: commercial_licenses
-      DB_USER: postgres
-      DB_PASSWORD: postgres123
-      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/commercial_licenses
+      # Oracle Database Configuration
+      DB_USER: ${DB_USER:-AI_READ}
+      DB_PASSWORD: ${DB_PASSWORD:-Ai2025aI}
+      DATABASE_URL: ${DATABASE_URL}
+      
+      # Azure OpenAI Configuration
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
       AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME}
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION}
+      AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME}
+      
+      # Application Configuration
+      LLM_MODEL: ${LLM_MODEL:-gpt-3.5-turbo}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - commercial_network
-    volumes:
-      - ./Commercial_Licenses.xlsx:/app/Commercial_Licenses.xlsx:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  importer:
-    build: .
-    container_name: commercial_license_importer
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: commercial_licenses
-      DB_USER: postgres
-      DB_PASSWORD: postgres123
-      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/commercial_licenses
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - commercial_network
-    volumes:
-      - ./Commercial_Licenses.xlsx:/app/Commercial_Licenses.xlsx:ro
-    command: python import_commercial_data.py
-    profiles:
-      - import
-
-volumes:
-  postgres_data:
+  # Optional: Oracle SQL Developer Web (if you want a web interface for Oracle)
+  # Uncomment if you need a web-based Oracle client
+  # oracle-web:
+  #   image: oracle/sqldev-web:latest
+  #   container_name: oracle_web_client
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - commercial_network
+  #   restart: unless-stopped
 
 networks:
   commercial_network:
