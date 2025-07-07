@@ -438,17 +438,38 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             # Remove trailing semicolons that cause ORA-00933
             sql_query = re.sub(r';\s*$', '', sql_query)
             
-            # Remove any problematic characters that cause ORA-00911
-            # Remove smart quotes, en-dash, em-dash, and other unicode characters
+            # PRESERVE QUOTED STRINGS (including Arabic text) before cleaning
+            quoted_strings = []
+            def preserve_quotes(match):
+                quoted_strings.append(match.group(0))
+                return f"__QUOTED_STRING_{len(quoted_strings)-1}__"
+            
+            # Preserve both single and double quoted strings
+            sql_query = re.sub(r"'([^']*)'", preserve_quotes, sql_query)
+            sql_query = re.sub(r'"([^"]*)"', preserve_quotes, sql_query)
+            
+            # Now clean problematic characters ONLY outside of quotes
             sql_query = sql_query.replace('"', '"').replace('"', '"')
             sql_query = sql_query.replace(''', "'").replace(''', "'")
             sql_query = sql_query.replace('–', '-').replace('—', '-')
             sql_query = sql_query.replace('…', '...')
             
-            # Remove any non-ASCII characters except basic SQL characters
-            sql_query = ''.join(char for char in sql_query if ord(char) < 128 or char.isspace())
+            # Remove any non-ASCII characters except in preserved quoted strings
+            # Keep basic SQL characters and placeholder tokens
+            cleaned_chars = []
+            for char in sql_query:
+                if (ord(char) < 128 or char.isspace() or 
+                    sql_query[max(0, sql_query.find(char)-10):sql_query.find(char)+10].find('__QUOTED_STRING_') != -1):
+                    cleaned_chars.append(char)
+                else:
+                    cleaned_chars.append(' ')
+            sql_query = ''.join(cleaned_chars)
             
-            # Remove any extra whitespace and newlines
+            # Restore quoted strings with their original content (including Arabic)
+            for i, quoted_string in enumerate(quoted_strings):
+                sql_query = sql_query.replace(f"__QUOTED_STRING_{i}__", quoted_string)
+            
+            # Remove any extra whitespace
             sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
             
@@ -501,23 +522,37 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                                   'AS', 'AND', 'OR', 'DESC', 'ASC', 'HAVING', 'DISTINCT', 'TOP', 'LIMIT', 'ROWNUM',
                                   'AI_USER', 'COMMERCIAL_LICENSE_MV']
                     
+                    # Oracle-specific functions and keywords
+                    oracle_functions = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'NVL', 'NVL2', 'DECODE', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+                                       'SUBSTR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM', 'ROUND', 'TRUNC', 'CEIL', 'FLOOR',
+                                       'EXTRACT', 'SYSDATE', 'SYSTIMESTAMP', 'ADD_MONTHS', 'MONTHS_BETWEEN']
+                    
+                    # Date format patterns
+                    date_formats = ['YYYY', 'MM', 'DD', 'HH24', 'MI', 'SS', 'MON', 'MONTH', 'DY', 'DAY']
+                    
                     if (token.upper() in sql_keywords or 
+                        token.upper() in oracle_functions or
+                        token.upper() in date_formats or
                         token in column_names or
                         token.isdigit() or 
                         len(token) <= 2 or
                         token.startswith('license_') or  # Allow aliases like license_count
                         token.startswith('total_') or   # Allow aliases like total_count
+                        token.startswith('issue_') or   # Allow aliases like issue_month
                         token.endswith('_count') or    # Allow any count aliases
                         token.endswith('_sum') or      # Allow sum aliases
-                        token.endswith('_avg')):       # Allow avg aliases
+                        token.endswith('_avg') or      # Allow avg aliases
+                        token.endswith('_month') or    # Allow month aliases
+                        token.endswith('_year') or     # Allow year aliases
+                        token.endswith('_date')):      # Allow date aliases
                         continue
                     
-                    # If we get here, it might be an invalid column
+                    # If we get here, it might be an invalid column - but be less strict
                     print(f"Debug - Checking potentially invalid token: '{token}'")
                     if token not in column_names:
-                        print(f"Debug - Confirmed invalid token: '{token}', but let's check if it's part of a valid function...")
-                        # Don't immediately fallback - this might be part of a valid SQL function
-                        # Let Oracle handle the validation instead
+                        print(f"Debug - Token '{token}' not in columns, but allowing Oracle to validate...")
+                        # Don't immediately fallback - let Oracle handle the validation
+                        # Only fallback for obviously wrong things
                         continue
             
             print(f"Debug - FINAL SQL TO EXECUTE: '{sql_query}'")
