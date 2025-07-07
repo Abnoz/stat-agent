@@ -273,42 +273,37 @@ Always format your response to include the SQL query even if you execute it succ
         try:
             schema_info = self.get_table_schema(self.main_table)
             
-            prompt = f"""You are a SQL expert analyzing commercial licensing data from Oracle materialized views. Generate ONLY a valid Oracle SQL SELECT statement using the EXACT column names provided below.
-
-IMPORTANT: You MUST use the EXACT column names as they appear in the schema. DO NOT create placeholder names or generic names.
+            prompt = f"""Generate a valid Oracle SQL SELECT statement to answer the question using the database schema below.
 
 Database Schema for '{self.main_table}':
 {schema_info}
 
-CRITICAL RULES:
-1. Use ONLY the column names listed in the schema above - no other column names are allowed
-2. Always use the full table name: {self.main_table}
-3. For limiting results: WHERE ROWNUM <= 10
-4. For counts: SELECT column_name, COUNT(*) FROM table GROUP BY column_name
-5. For simple totals: SELECT COUNT(*) as total_count FROM table
-6. Always include meaningful column aliases in your SELECT
-7. DO NOT use semicolons at the end
-8. DO NOT use placeholder column names like "business_type_column" - use actual column names from schema
-
-QUERY PATTERNS:
-- For total counts: SELECT COUNT(*) as total_licenses FROM {self.main_table}
-- For breakdowns: SELECT actual_column_name, COUNT(*) as count FROM {self.main_table} GROUP BY actual_column_name ORDER BY count DESC
-- For top results: SELECT * FROM (SELECT columns FROM {self.main_table} ORDER BY some_column) WHERE ROWNUM <= 10
-
 Question: {question}
 
-Based on the schema above, generate a valid Oracle SQL SELECT statement that answers this question. Use ONLY the column names that exist in the schema.
+Requirements:
+1. Start with SELECT keyword
+2. Use ONLY column names from the schema above
+3. Use table name: {self.main_table}
+4. For counts: SELECT COUNT(*) as total_count FROM {self.main_table}
+5. For breakdowns: SELECT column_name, COUNT(*) as count FROM {self.main_table} GROUP BY column_name
+6. No semicolons at the end
+7. Valid Oracle SQL syntax
 
-SQL Query:"""
+Example for total count: SELECT COUNT(*) as total_licenses FROM {self.main_table}
+
+Generate the SELECT statement:"""
 
             sql_response = self.llm.invoke(prompt)
-            sql_query = sql_response.content.strip()
+            raw_sql = sql_response.content.strip()
+            print(f"Debug - Raw LLM response: '{raw_sql}'")
             
             # Clean up the response more thoroughly
-            sql_query = re.sub(r'^```sql\s*', '', sql_query, flags=re.IGNORECASE)
+            sql_query = re.sub(r'^```sql\s*', '', raw_sql, flags=re.IGNORECASE)
             sql_query = re.sub(r'\s*```$', '', sql_query)
             sql_query = re.sub(r'^```\s*', '', sql_query)
             sql_query = re.sub(r'\s*```$', '', sql_query)
+            sql_query = re.sub(r'^SQL Query:\s*', '', sql_query, flags=re.IGNORECASE)
+            sql_query = re.sub(r'^Query:\s*', '', sql_query, flags=re.IGNORECASE)
             
             # Remove trailing semicolons that cause ORA-00933
             sql_query = re.sub(r';\s*$', '', sql_query)
@@ -316,6 +311,20 @@ SQL Query:"""
             # Remove any extra whitespace and newlines
             sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
+            
+            print(f"Debug - Cleaned SQL query: '{sql_query}'")
+            
+            # If the query doesn't start with SELECT, try to fix it
+            if not sql_query.upper().startswith(('SELECT', 'WITH')):
+                # Try to extract SELECT from the response
+                select_match = re.search(r'(SELECT\s+.*)', sql_query, re.IGNORECASE | re.DOTALL)
+                if select_match:
+                    sql_query = select_match.group(1).strip()
+                    print(f"Debug - Extracted SELECT query: '{sql_query}'")
+                else:
+                    # Generate a simple count query as fallback
+                    sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                    print(f"Debug - Using fallback query: '{sql_query}'")
             
             # Validate the query starts with SELECT
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
@@ -325,7 +334,7 @@ SQL Query:"""
                     chart_type="table",
                     insights=None,
                     message="Only SELECT queries are allowed",
-                    error="Query must be a SELECT statement"
+                    error=f"Query must be a SELECT statement. Generated: '{sql_query}'"
                 )
             
             # Ensure query only references allowed materialized views
@@ -341,7 +350,7 @@ SQL Query:"""
                     error=f"Query does not reference any of: {', '.join(self.materialized_views)}"
                 )
             
-            print(f"Debug - Generated Oracle SQL: {sql_query}")
+            print(f"Debug - Final Oracle SQL: {sql_query}")
             
             try:
                 # Use direct Oracle connection for query execution
