@@ -517,6 +517,99 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 "('جده', 'الرياض')": "('جدة', 'الرياض')"
             }
             
+            # Administrative level mapping for intelligent error handling
+            admin_levels = {
+                # Common confusion: things that are regions, not amanas
+                'regions_not_amanas': [
+                    'الرياض', 'مكة المكرمة', 'المنطقة الشرقية', 'عسير', 'المدينة المنورة',
+                    'القصيم', 'حائل', 'تبوك', 'الحدود الشمالية', 'جيزان', 'نجران', 'الباحة', 'الجوف'
+                ],
+                # Things that are actually amanas
+                'actual_amanas': [
+                    'أمانة منطقة الرياض', 'أمانة العاصمة المقدسة', 'أمانة المدينة المنورة',
+                    'أمانة المنطقة الشرقية', 'أمانة منطقة عسير', 'أمانة منطقة القصيم'
+                ],
+                # Things that are baladias/municipalities
+                'baladias': [
+                    'بلدية الخبر', 'بلدية الظهران', 'بلدية القطيف', 'بلدية الأحساء',
+                    'بلدية الطائف', 'بلدية الخرج', 'بلدية بريدة', 'بلدية عنيزة'
+                ]
+            }
+            
+            # Check for administrative level confusion in the question
+            question_lower = question.lower()
+            detected_confusion = None
+            suggestions = []
+            
+            # Check if user is asking about amana but mentions region names
+            if any(term in question_lower for term in ['أمانة', 'امانة']):
+                for region in admin_levels['regions_not_amanas']:
+                    if region in question:
+                        detected_confusion = f"'{region}' is a region (منطقة), not an Amana (أمانة)"
+                        # Find corresponding amana
+                        if region == 'الرياض':
+                            suggestions.append("Did you mean 'أمانة منطقة الرياض'?")
+                        elif region == 'مكة المكرمة':
+                            suggestions.append("Did you mean 'أمانة العاصمة المقدسة'?")
+                        elif region == 'المدينة المنورة':
+                            suggestions.append("Did you mean 'أمانة المدينة المنورة'?")
+                        elif region == 'المنطقة الشرقية':
+                            suggestions.append("Did you mean 'أمانة المنطقة الشرقية'?")
+                        break
+            
+            # Check if user is asking about region but mentions city names
+            if any(term in question_lower for term in ['منطقة', 'مناطق']):
+                cities = ['جدة', 'الدمام', 'الخبر', 'الطائف', 'بريدة']
+                for city in cities:
+                    if city in question:
+                        detected_confusion = f"'{city}' is a city, not a region (منطقة)"
+                        if city in ['جدة', 'الطائف']:
+                            suggestions.append("Did you mean 'منطقة مكة المكرمة'?")
+                        elif city in ['الدمام', 'الخبر']:
+                            suggestions.append("Did you mean 'المنطقة الشرقية'?")
+                        elif city == 'بريدة':
+                            suggestions.append("Did you mean 'منطقة القصيم'?")
+                        break
+            
+            # Check if user is asking about baladia but mentions amana/region names
+            if any(term in question_lower for term in ['بلدية', 'بلديات']):
+                regions = ['الرياض', 'مكة المكرمة', 'المنطقة الشرقية']
+                for region in regions:
+                    if region in question:
+                        detected_confusion = f"'{region}' is a region (منطقة), not a municipality (بلدية)"
+                        suggestions.append(f"For municipalities in {region}, try asking about specific cities like الخبر, الظهران, or الدمام")
+                        break
+            
+            # Check for common spelling mistakes or alternative names
+            common_mistakes = {
+                'الشرقيه': 'المنطقة الشرقية',
+                'الشرقية': 'المنطقة الشرقية', 
+                'منطقة الرياض': 'الرياض',
+                'منطقة مكة': 'مكة المكرمة',
+                'امانة الرياض': 'أمانة منطقة الرياض',
+                'امانة مكة': 'أمانة العاصمة المقدسة'
+            }
+            
+            # Apply common mistake corrections
+            for mistake, correction in common_mistakes.items():
+                if mistake in question:
+                    print(f"Debug - Detected common mistake: '{mistake}' → '{correction}'")
+                    suggestions.append(f"Did you mean '{correction}'?")
+                    if not detected_confusion:
+                        detected_confusion = f"Common alternative name detected"
+            
+            # If administrative confusion detected, return helpful message
+            if detected_confusion and suggestions:
+                suggestion_text = " " + " ".join(suggestions)
+                return QueryResponse(
+                    success=False,
+                    data=None,
+                    chart_type="none",
+                    insights=None,
+                    message=f"Administrative Level Confusion Detected: {detected_confusion}.{suggestion_text}",
+                    error=f"Please use the correct administrative level in your query. {suggestion_text}"
+                )
+            
             # Apply corrections
             original_query = sql_query
             for wrong_name, correct_name in city_name_corrections.items():
