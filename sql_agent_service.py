@@ -83,9 +83,12 @@ class SQLAgentService:
             mv_schema = self.get_table_schema(mv)
             all_schemas += f"\n{mv_schema}\n"
         
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        
-        system_message = f"""You are a SQL expert specialized in analyzing commercial licensing data from Oracle materialized views.
+        # Only create LangChain agent if SQLAlchemy connection is available
+        if self.db is not None:
+            try:
+                toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
+                
+                system_message = f"""You are a SQL expert specialized in analyzing commercial licensing data from Oracle materialized views.
 
 IMPORTANT RESTRICTIONS:
 - You can ONLY query these materialized views: {', '.join(self.materialized_views)}
@@ -124,17 +127,24 @@ ORACLE SQL SPECIFIC NOTES:
 - Use NVL for null handling
 
 Always format your response to include the SQL query even if you execute it successfully."""
-        
-        self.agent_executor = create_sql_agent(
-            llm=self.llm,
-            toolkit=toolkit,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-            verbose=True,
-            handle_parsing_errors=True,
-            agent_executor_kwargs={
-                "system_message": system_message
-            }
-        )
+                
+                self.agent_executor = create_sql_agent(
+                    llm=self.llm,
+                    toolkit=toolkit,
+                    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    agent_executor_kwargs={
+                        "system_message": system_message
+                    }
+                )
+                print("✅ LangChain SQL Agent created successfully")
+            except Exception as e:
+                print(f"⚠️ LangChain agent creation failed, using direct Oracle queries only: {str(e)}")
+                self.agent_executor = None
+        else:
+            print("⚠️ Using direct Oracle connection only (no LangChain agent)")
+            self.agent_executor = None
     
     def _detect_chart_type(self, df: pd.DataFrame, question: str) -> str:
         question_lower = question.lower()
