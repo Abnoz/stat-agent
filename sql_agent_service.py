@@ -126,7 +126,28 @@ ORACLE SQL SPECIFIC NOTES:
 - Use ROWNUM for limiting results instead of LIMIT
 - Use NVL for null handling
 
-Always format your response to include the SQL query even if you execute it successfully."""
+Always format your response to include the SQL query even if you execute it successfully.
+
+COLUMN MAPPING FOR ARABIC TERMS:
+- أمانة/أمانات/Amana/Amanat → AMANA_NAME
+- بلدية/باليديا/Municipality → BALADIA_NAME  
+- منطقة/Region → REGION_NMAE
+- مدينة/City → CITY_NAME
+- نشاط/Activity → D_ACTIVITIES_NAME
+- حالة/Status → LIC_STATUS
+- رخصة/License → LICENSE_ID (for counting)
+
+CITY NAME MAPPING (use exact database spellings):
+- الرياض/Riyadh → الرياض
+- جده/جدة/Jeddah → جدة  
+- مكة/Mecca/Makkah → أمانة العاصمة المقدسة
+- المدينة/Medina → أمانة المدينة المنورة
+- الدمام/Dammam → الدمام
+- تبوك/Tabuk → تبوك
+- جيزان/Jazan → جيزان
+- أبها/Abha → أبها
+- حائل/Hail → حائل
+- الباحة/Al Baha → الباحة"""
                 
                 self.agent_executor = create_sql_agent(
                     llm=self.llm,
@@ -408,6 +429,18 @@ COLUMN MAPPING FOR ARABIC TERMS:
 - حالة/Status → LIC_STATUS
 - رخصة/License → LICENSE_ID (for counting)
 
+CITY NAME MAPPING (use exact database spellings):
+- الرياض/Riyadh → الرياض
+- جده/جدة/Jeddah → جدة  
+- مكة/Mecca/Makkah → أمانة العاصمة المقدسة
+- المدينة/Medina → أمانة المدينة المنورة
+- الدمام/Dammam → الدمام
+- تبوك/Tabuk → تبوك
+- جيزان/Jazan → جيزان
+- أبها/Abha → أبها
+- حائل/Hail → حائل
+- الباحة/Al Baha → الباحة
+
 STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
 1. START WITH "SELECT" - NOTHING ELSE
 2. USE ONLY THESE COLUMN NAMES: {columns_list}
@@ -468,6 +501,33 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             # Restore quoted strings with their original content (including Arabic)
             for i, quoted_string in enumerate(quoted_strings):
                 sql_query = sql_query.replace(f"__QUOTED_STRING_{i}__", quoted_string)
+            
+            # Fix common Arabic city name variations
+            city_name_corrections = {
+                "'جده'": "'جدة'",  # Jeddah correction
+                "'مكة'": "'أمانة العاصمة المقدسة'",  # Mecca correction
+                "'المدينة'": "'أمانة المدينة المنورة'",  # Medina correction
+                "('جده')": "('جدة')",  # In parentheses
+                "('مكة')": "('أمانة العاصمة المقدسة')",
+                "('المدينة')": "('أمانة المدينة المنورة')",
+                ", 'جده')": ", 'جدة')",  # In lists
+                ", 'مكة')": ", 'أمانة العاصمة المقدسة')",
+                ", 'المدينة')": ", 'أمانة المدينة المنورة')",
+                "('الرياض', 'جده')": "('الرياض', 'جدة')",  # Common pairs
+                "('جده', 'الرياض')": "('جدة', 'الرياض')"
+            }
+            
+            # Apply corrections
+            original_query = sql_query
+            for wrong_name, correct_name in city_name_corrections.items():
+                if wrong_name in sql_query:
+                    sql_query = sql_query.replace(wrong_name, correct_name)
+                    print(f"Debug - Corrected city name: {wrong_name} → {correct_name}")
+            
+            if original_query != sql_query:
+                print(f"Debug - City name corrections applied")
+                print(f"Debug - Original: {original_query}")
+                print(f"Debug - Corrected: {sql_query}")
             
             # Remove any extra whitespace
             sql_query = ' '.join(sql_query.split())
