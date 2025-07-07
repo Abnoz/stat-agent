@@ -18,7 +18,7 @@ load_dotenv()
 
 class SQLAgentService:
     def __init__(self, database_url=None):
-        # Oracle connection configuration
+        # Oracle connection configuration - using direct connection like your test
         self.official_tns = """(DESCRIPTION=(ADDRESS_LIST=(FAILOVER=ON)(LOAD_BALANCE=ON)(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=ruhmpp-exa-scan.momra.net)(PORT=1521)))(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=drmpp-exa-scan.momra.net)(PORT=1521))))(CONNECT_DATA=(SERVICE_NAME=MEDIUM_AIDBPRO.momra.net)(FAILOVER_MODE=(TYPE=select)(METHOD=basic))))"""
         self.db_user = os.getenv('DB_USER', 'AI_READ')
         self.db_password = os.getenv('DB_PASSWORD', 'Ai2025aI')
@@ -30,8 +30,6 @@ class SQLAgentService:
             "AI_USER.COM_REQUESTS_COMPLETE_MV"
         ]
         
-        self.database_url = database_url or self._build_oracle_url()
-        
         self.llm = AzureChatOpenAI(
             azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
             api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
@@ -41,22 +39,39 @@ class SQLAgentService:
         )
         
         self.db = None
-        self.agent_executor = None
+        self.oracle_connection = None
         self.main_table = "AI_USER.COMMERCIAL_LICENSE_MV"  # Primary table for commercial data
+        self._setup_oracle_connection()
         self._setup_database_connection()
         self._create_agent()
     
+    def _setup_oracle_connection(self):
+        """Setup direct Oracle connection for queries"""
+        try:
+            self.oracle_connection = oracledb.connect(
+                user=self.db_user,
+                password=self.db_password,
+                dsn=self.official_tns
+            )
+            print("✅ Direct Oracle connection established successfully")
+        except Exception as e:
+            raise ConnectionError(f"Failed to establish direct Oracle connection: {str(e)}")
+    
     def _build_oracle_url(self):
-        # Create Oracle connection URL for SQLAlchemy
+        """Create Oracle connection URL for SQLAlchemy"""
         return f"oracle+oracledb://{self.db_user}:{self.db_password}@{self.official_tns}"
     
     def _setup_database_connection(self):
+        """Setup SQLAlchemy connection for LangChain agent"""
         try:
-            engine = create_engine(self.database_url)
+            database_url = self._build_oracle_url()
+            engine = create_engine(database_url)
             # Include all materialized views in the database connection
             self.db = SQLDatabase(engine, include_tables=self.materialized_views)
+            print("✅ SQLAlchemy Oracle connection established for LangChain")
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to Oracle database: {str(e)}")
+            print(f"⚠️ SQLAlchemy connection failed, will use direct Oracle connection: {str(e)}")
+            # We can still proceed with direct Oracle connection for queries
     
     def _create_agent(self):
         # Get schema for primary commercial table
@@ -339,8 +354,17 @@ Generate the Oracle SQL query that best answers this question:"""
             print(f"Debug - Generated Oracle SQL: {sql_query}")
             
             try:
-                df = pd.read_sql(sql_query, self.db._engine)
-                print(f"Debug - Query returned {len(df)} rows")
+                # Use direct Oracle connection for query execution
+                cursor = self.oracle_connection.cursor()
+                cursor.execute(sql_query)
+                
+                # Fetch results and convert to DataFrame
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                cursor.close()
+                
+                df = pd.DataFrame(rows, columns=columns)
+                print(f"Debug - Query returned {len(df)} rows using direct Oracle connection")
                 
                 if df.empty:
                     return QueryResponse(
@@ -456,65 +480,74 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
     def get_table_schema(self, table_name: str) -> str:
         """Get detailed schema information for a specific Oracle materialized view"""
         try:
-            return self.db.get_table_info_no_throw([table_name])
+            # Try LangChain method first if available
+            if self.db:
+                return self.db.get_table_info_no_throw([table_name])
         except:
-            try:
-                # Oracle-specific schema query for materialized views
-                with self.db._engine.connect() as conn:
-                    # Parse schema and table name from full name (e.g., AI_USER.COMMERCIAL_LICENSE_MV)
-                    if '.' in table_name:
-                        schema, table = table_name.split('.', 1)
+            pass
+        
+        try:
+            # Use direct Oracle connection for schema query
+            cursor = self.oracle_connection.cursor()
+            
+            # Parse schema and table name from full name (e.g., AI_USER.COMMERCIAL_LICENSE_MV)
+            if '.' in table_name:
+                schema, table = table_name.split('.', 1)
+            else:
+                schema = 'AI_USER'
+                table = table_name
+            
+            cursor.execute("""
+                SELECT 
+                    COLUMN_NAME,
+                    DATA_TYPE,
+                    DATA_LENGTH,
+                    DATA_PRECISION,
+                    DATA_SCALE,
+                    NULLABLE,
+                    DATA_DEFAULT
+                FROM ALL_TAB_COLUMNS 
+                WHERE OWNER = :schema 
+                AND TABLE_NAME = :table
+                ORDER BY COLUMN_ID
+            """, {'schema': schema, 'table': table})
+            
+            columns = cursor.fetchall()
+            
+            if not columns:
+                cursor.close()
+                return f"Materialized View: {table_name}\nError: No columns found or access denied"
+            
+            schema_info = f"Materialized View: {table_name}\nColumns:\n"
+            for col_name, data_type, data_length, data_precision, data_scale, nullable, default in columns:
+                # Format data type with length/precision
+                if data_type in ['VARCHAR2', 'CHAR'] and data_length:
+                    type_info = f"{data_type}({data_length})"
+                elif data_type == 'NUMBER' and data_precision:
+                    if data_scale and data_scale > 0:
+                        type_info = f"{data_type}({data_precision},{data_scale})"
                     else:
-                        schema = 'AI_USER'
-                        table = table_name
-                    
-                    result = conn.execute(text(f"""
-                        SELECT 
-                            COLUMN_NAME,
-                            DATA_TYPE,
-                            DATA_LENGTH,
-                            DATA_PRECISION,
-                            DATA_SCALE,
-                            NULLABLE,
-                            DATA_DEFAULT
-                        FROM ALL_TAB_COLUMNS 
-                        WHERE OWNER = '{schema}' 
-                        AND TABLE_NAME = '{table}'
-                        ORDER BY COLUMN_ID
-                    """))
-                    columns = result.fetchall()
-                    
-                    if not columns:
-                        return f"Materialized View: {table_name}\nError: No columns found or access denied"
-                    
-                    schema_info = f"Materialized View: {table_name}\nColumns:\n"
-                    for col_name, data_type, data_length, data_precision, data_scale, nullable, default in columns:
-                        # Format data type with length/precision
-                        if data_type in ['VARCHAR2', 'CHAR'] and data_length:
-                            type_info = f"{data_type}({data_length})"
-                        elif data_type == 'NUMBER' and data_precision:
-                            if data_scale and data_scale > 0:
-                                type_info = f"{data_type}({data_precision},{data_scale})"
-                            else:
-                                type_info = f"{data_type}({data_precision})"
-                        else:
-                            type_info = data_type
-                        
-                        nullable_info = "NULL" if nullable == "Y" else "NOT NULL"
-                        default_info = f" DEFAULT {default}" if default else ""
-                        schema_info += f"  - {col_name}: {type_info} {nullable_info}{default_info}\n"
-                    
-                    # Add row count information
-                    try:
-                        count_result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
-                        row_count = count_result.fetchone()[0]
-                        schema_info += f"\nRow Count: {row_count:,}\n"
-                    except:
-                        schema_info += f"\nRow Count: Unable to retrieve\n"
-                    
-                    return schema_info
-            except Exception as e:
-                return f"Materialized View: {table_name}\nError getting schema: {str(e)}"
+                        type_info = f"{data_type}({data_precision})"
+                else:
+                    type_info = data_type
+                
+                nullable_info = "NULL" if nullable == "Y" else "NOT NULL"
+                default_info = f" DEFAULT {default}" if default else ""
+                schema_info += f"  - {col_name}: {type_info} {nullable_info}{default_info}\n"
+            
+            # Add row count information
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+                schema_info += f"\nRow Count: {row_count:,}\n"
+            except:
+                schema_info += f"\nRow Count: Unable to retrieve\n"
+            
+            cursor.close()
+            return schema_info
+            
+        except Exception as e:
+            return f"Materialized View: {table_name}\nError getting schema: {str(e)}"
     
     def get_database_info(self) -> Dict[str, Any]:
         """Get information about all available materialized views"""
@@ -536,22 +569,24 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
     def test_oracle_connection(self) -> bool:
         """Test Oracle database connection and materialized view access"""
         try:
-            with self.db._engine.connect() as conn:
-                # Test basic connection
-                result = conn.execute(text("SELECT SYSDATE FROM DUAL"))
-                sysdate = result.fetchone()
-                print(f"✅ Oracle connection successful. Current time: {sysdate[0]}")
-                
-                # Test each materialized view
-                for mv_name in self.materialized_views:
-                    try:
-                        result = conn.execute(text(f"SELECT COUNT(*) FROM {mv_name}"))
-                        count = result.fetchone()[0]
-                        print(f"✅ {mv_name}: {count:,} rows")
-                    except Exception as e:
-                        print(f"❌ {mv_name}: Error - {str(e)}")
-                
-                return True
+            cursor = self.oracle_connection.cursor()
+            
+            # Test basic connection
+            cursor.execute("SELECT SYSDATE FROM DUAL")
+            sysdate = cursor.fetchone()
+            print(f"✅ Oracle connection successful. Current time: {sysdate[0]}")
+            
+            # Test each materialized view
+            for mv_name in self.materialized_views:
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {mv_name}")
+                    count = cursor.fetchone()[0]
+                    print(f"✅ {mv_name}: {count:,} rows")
+                except Exception as e:
+                    print(f"❌ {mv_name}: Error - {str(e)}")
+            
+            cursor.close()
+            return True
         except Exception as e:
             print(f"❌ Oracle connection failed: {str(e)}")
             return False 
