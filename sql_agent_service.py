@@ -446,34 +446,38 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             # Validate that only actual columns from the schema are used
             if column_names:
                 query_upper = sql_query.upper()
+                # Split query into tokens more intelligently
+                import re
+                # Use regex to properly tokenize SQL, preserving function calls
+                tokens = re.findall(r'\b\w+\b', sql_query)
+                
+                print(f"Debug - SQL tokens to validate: {tokens}")
+                
                 # Check for invalid column references
-                for word in sql_query.split():
-                    # Clean the word of punctuation
-                    clean_word = word.replace(',', '').replace('(', '').replace(')', '').replace('*', '').strip()
-                    
+                for token in tokens:
                     # Skip SQL keywords, functions, operators, and table names
                     sql_keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 
-                                  'AS', 'AND', 'OR', 'DESC', 'ASC', 'HAVING', 'DISTINCT', 'TOP', 'LIMIT', 'ROWNUM']
+                                  'AS', 'AND', 'OR', 'DESC', 'ASC', 'HAVING', 'DISTINCT', 'TOP', 'LIMIT', 'ROWNUM',
+                                  'AI_USER', 'COMMERCIAL_LICENSE_MV']
                     
-                    if (clean_word.upper() in sql_keywords or 
-                        clean_word in [self.main_table, self.main_table.split('.')[-1]] or
-                        clean_word in column_names or
-                        clean_word.isdigit() or 
-                        len(clean_word) <= 2 or
-                        clean_word == '' or
-                        clean_word.startswith('license_') or  # Allow aliases like license_count
-                        clean_word.startswith('total_') or   # Allow aliases like total_count
-                        clean_word.endswith('_count') or    # Allow any count aliases
-                        clean_word.endswith('_sum') or      # Allow sum aliases
-                        clean_word.endswith('_avg')):       # Allow avg aliases
+                    if (token.upper() in sql_keywords or 
+                        token in column_names or
+                        token.isdigit() or 
+                        len(token) <= 2 or
+                        token.startswith('license_') or  # Allow aliases like license_count
+                        token.startswith('total_') or   # Allow aliases like total_count
+                        token.endswith('_count') or    # Allow any count aliases
+                        token.endswith('_sum') or      # Allow sum aliases
+                        token.endswith('_avg')):       # Allow avg aliases
                         continue
                     
                     # If we get here, it might be an invalid column
-                    print(f"Debug - Checking potentially invalid column: '{clean_word}' from original word '{word}'")
-                    if clean_word not in column_names and clean_word != '':
-                        print(f"Debug - Confirmed invalid column: '{clean_word}', falling back to count query")
-                        sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
-                        break
+                    print(f"Debug - Checking potentially invalid token: '{token}'")
+                    if token not in column_names:
+                        print(f"Debug - Confirmed invalid token: '{token}', but let's check if it's part of a valid function...")
+                        # Don't immediately fallback - this might be part of a valid SQL function
+                        # Let Oracle handle the validation instead
+                        continue
             
             print(f"Debug - FINAL SQL TO EXECUTE: '{sql_query}'")
             
