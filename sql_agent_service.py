@@ -273,25 +273,45 @@ Always format your response to include the SQL query even if you execute it succ
         try:
             schema_info = self.get_table_schema(self.main_table)
             
-            prompt = f"""Generate a valid Oracle SQL SELECT statement to answer the question using the database schema below.
+            # Extract just the column names from schema for clearer reference
+            column_names = []
+            if "Columns:" in schema_info:
+                lines = schema_info.split('\n')
+                for line in lines:
+                    if line.strip().startswith('- '):
+                        col_name = line.split(':')[0].replace('- ', '').strip()
+                        column_names.append(col_name)
+            
+            columns_list = ', '.join(column_names) if column_names else "Unable to extract columns"
+            
+            print(f"Debug - Extracted column names: {column_names}")
+            print(f"Debug - Columns list: {columns_list}")
+            
+            prompt = f"""CRITICAL: Generate ONLY a clean Oracle SQL SELECT statement. No explanations, no markdown, no extra text.
 
-Database Schema for '{self.main_table}':
+TABLE: {self.main_table}
+
+AVAILABLE COLUMNS (use EXACTLY these names):
+{columns_list}
+
+FULL SCHEMA:
 {schema_info}
 
-Question: {question}
+QUESTION: {question}
 
-Requirements:
-1. Start with SELECT keyword
-2. Use ONLY column names from the schema above
-3. Use table name: {self.main_table}
-4. For counts: SELECT COUNT(*) as total_count FROM {self.main_table}
-5. For breakdowns: SELECT column_name, COUNT(*) as count FROM {self.main_table} GROUP BY column_name
-6. No semicolons at the end
-7. Valid Oracle SQL syntax
+STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
+1. START WITH "SELECT" - NOTHING ELSE
+2. USE ONLY THESE COLUMN NAMES: {columns_list}
+3. USE EXACT TABLE NAME: {self.main_table}
+4. NO SEMICOLONS AT END
+5. NO MARKDOWN, NO BACKTICKS, NO EXPLANATIONS
+6. ONLY ASCII CHARACTERS
 
-Example for total count: SELECT COUNT(*) as total_licenses FROM {self.main_table}
+COMMON PATTERNS:
+- Total count: SELECT COUNT(*) as total_count FROM {self.main_table}
+- Column breakdown: SELECT {column_names[0] if column_names else 'column_name'}, COUNT(*) as count FROM {self.main_table} GROUP BY {column_names[0] if column_names else 'column_name'} ORDER BY count DESC
 
-Generate the SELECT statement:"""
+OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
 
             sql_response = self.llm.invoke(prompt)
             raw_sql = sql_response.content.strip()
@@ -308,9 +328,23 @@ Generate the SELECT statement:"""
             # Remove trailing semicolons that cause ORA-00933
             sql_query = re.sub(r';\s*$', '', sql_query)
             
+            # Remove any problematic characters that cause ORA-00911
+            # Remove smart quotes, en-dash, em-dash, and other unicode characters
+            sql_query = sql_query.replace('"', '"').replace('"', '"')
+            sql_query = sql_query.replace(''', "'").replace(''', "'")
+            sql_query = sql_query.replace('–', '-').replace('—', '-')
+            sql_query = sql_query.replace('…', '...')
+            
+            # Remove any non-ASCII characters except basic SQL characters
+            sql_query = ''.join(char for char in sql_query if ord(char) < 128 or char.isspace())
+            
             # Remove any extra whitespace and newlines
             sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
+            
+            # Ensure only valid SQL characters remain (letters, numbers, spaces, common SQL punctuation)
+            sql_query = re.sub(r'[^\w\s\(\)\.,=<>!\-\+\*\/\'\"_]', ' ', sql_query)
+            sql_query = ' '.join(sql_query.split())  # Clean up extra spaces
             
             print(f"Debug - Cleaned SQL query: '{sql_query}'")
             
@@ -322,9 +356,24 @@ Generate the SELECT statement:"""
                     sql_query = select_match.group(1).strip()
                     print(f"Debug - Extracted SELECT query: '{sql_query}'")
                 else:
-                    # Generate a simple count query as fallback
-                    sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                    # Generate a safe fallback query based on question content
+                    question_lower = question.lower()
+                    if any(word in question_lower for word in ['total', 'count', 'number', 'how many', 'عدد', 'إجمالي', 'كم']):
+                        sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                    else:
+                        # Default to simple count
+                        sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                     print(f"Debug - Using fallback query: '{sql_query}'")
+            
+            # Additional validation: ensure the query is reasonable
+            if len(sql_query.strip()) < 10:  # Too short to be valid
+                sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                print(f"Debug - Query too short, using fallback: '{sql_query}'")
+            
+            # Check for obvious issues and fix them
+            if 'FROM ' not in sql_query.upper():
+                sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                print(f"Debug - No FROM clause, using fallback: '{sql_query}'")
             
             # Validate the query starts with SELECT
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
