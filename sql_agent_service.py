@@ -315,6 +315,7 @@ ORACLE SQL SPECIFIC REQUIREMENTS:
 7. For status breakdowns, use CASE statements with descriptive labels
 8. For counts, include category labels not just numbers
 9. Group and order results logically
+10. END ALL STATEMENTS WITH SEMICOLON REMOVED - Oracle doesn't need semicolons in embedded SQL
 
 Question: {question}
 
@@ -324,20 +325,27 @@ CONSTRAINTS:
 - Use Oracle SQL syntax
 - Use column names exactly as they appear in schema
 - Return results suitable for chart visualization (2+ columns)
+- DO NOT include semicolons at the end
 
 Generate the Oracle SQL query that best answers this question:"""
 
             sql_response = self.llm.invoke(prompt)
             sql_query = sql_response.content.strip()
             
-            # Clean up the response
-            sql_query = re.sub(r'^```sql\s*', '', sql_query)
+            # Clean up the response more thoroughly
+            sql_query = re.sub(r'^```sql\s*', '', sql_query, flags=re.IGNORECASE)
             sql_query = re.sub(r'\s*```$', '', sql_query)
             sql_query = re.sub(r'^```\s*', '', sql_query)
             sql_query = re.sub(r'\s*```$', '', sql_query)
+            
+            # Remove trailing semicolons that cause ORA-00933
+            sql_query = re.sub(r';\s*$', '', sql_query)
+            
+            # Remove any extra whitespace and newlines
+            sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
             
-            # Security check: ensure query only contains SELECT and references materialized views
+            # Validate the query starts with SELECT
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
                 return QueryResponse(
                     success=False,
