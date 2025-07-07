@@ -651,7 +651,16 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                         top_value = df[numeric_cols[0]].max()
                         data_summary += f"Highest value: {top_category} with {top_value:,.0f}. "
             
-            # Handle single value responses (insight type)
+            # Handle single value responses (no chart needed)
+            if chart_type == "none" and len(df) == 1 and len(df.columns) == 1:
+                value = df.iloc[0, 0]
+                col_name = df.columns[0]
+                if isinstance(value, (int, float)):
+                    return f"The result is {value:,} for {col_name}. This represents the total count or value for your query about the commercial licensing data."
+                else:
+                    return f"The result is {value} for {col_name}."
+            
+            # Handle insight type for single values (legacy support)
             if chart_type == "insight" and len(df) == 1 and len(df.columns) == 1:
                 value = df.iloc[0, 0]
                 col_name = df.columns[0]
