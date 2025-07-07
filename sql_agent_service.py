@@ -149,33 +149,73 @@ Always format your response to include the SQL query even if you execute it succ
     def _detect_chart_type(self, df: pd.DataFrame, question: str) -> str:
         question_lower = question.lower()
         
+        # Single value responses - no chart needed
         if len(df.columns) == 1 and len(df) == 1:
             count_keywords = ['count', 'total', 'number', 'how many', 'عدد', 'إجمالي', 'كم', 'مجموع']
             if any(word in question_lower for word in count_keywords):
-                return "insight"
+                return "none"  # No chart needed for single values
         
+        # Single column with single row - usually a summary statistic
+        if len(df.columns) == 1 and len(df) == 1:
+            return "none"
+        
+        # Single column with multiple rows - could be a list, but check context
         if len(df.columns) == 1:
-            return "insight"
+            # If it's just a list of values without clear categories, might not need a chart
+            if len(df) > 50:  # Too many items for effective visualization
+                return "table"
+            return "bar"  # Simple bar chart for single column with multiple values
         
-        trend_keywords = ['trend', 'over time', 'timeline', 'monthly', 'daily', 'yearly', 'اتجاه', 'مع الوقت', 'شهريا', 'سنويا', 'تطور']
-        percentage_keywords = ['percentage', 'proportion', 'share', 'distribution', 'نسبة', 'توزيع', 'حصة']
-        comparison_keywords = ['compare', 'comparison', 'top', 'highest', 'lowest', 'مقارنة', 'أعلى', 'أقل', 'الأكثر', 'الأقل']
+        # Two columns where one is clearly a count/total - good for charts
+        if len(df.columns) == 2:
+            numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+            text_cols = df.select_dtypes(include=['object']).columns
+            
+            # Perfect for charts: category + numeric value
+            if len(numeric_cols) == 1 and len(text_cols) == 1:
+                # Check for different chart types based on context
+                trend_keywords = ['trend', 'over time', 'timeline', 'monthly', 'daily', 'yearly', 'اتجاه', 'مع الوقت', 'شهريا', 'سنويا', 'تطور']
+                percentage_keywords = ['percentage', 'proportion', 'share', 'distribution', 'نسبة', 'توزيع', 'حصة']
+                comparison_keywords = ['compare', 'comparison', 'top', 'highest', 'lowest', 'مقارنة', 'أعلى', 'أقل', 'الأكثر', 'الأقل']
+                
+                if any(word in question_lower for word in trend_keywords):
+                    return "line"
+                elif any(word in question_lower for word in percentage_keywords) and len(df) <= 10:
+                    return "pie"
+                elif any(word in question_lower for word in comparison_keywords):
+                    return "bar"
+                elif len(df) <= 10:  # Small number of categories - good for pie
+                    return "pie"
+                else:
+                    return "bar"  # Default for category + value
         
-        if any(word in question_lower for word in trend_keywords):
-            return "line"
-        elif any(word in question_lower for word in percentage_keywords) and len(df) <= 10:
-            return "pie"
-        elif any(word in question_lower for word in comparison_keywords):
-            return "bar"
-        elif len(df) > 20:
+        # Multiple columns - usually better as table unless specifically requested
+        if len(df.columns) > 2:
+            chart_keywords = ['chart', 'graph', 'visualize', 'plot', 'رسم', 'مخطط', 'رسم بياني']
+            if any(word in question_lower for word in chart_keywords):
+                return "bar"  # User explicitly wants a chart
+            elif len(df) > 20:  # Too much data for effective charting
+                return "table"
+            else:
+                return "table"  # Default to table for complex data
+        
+        # Large datasets - prefer table
+        if len(df) > 50:
             return "table"
-        else:
-            return "bar"
+        
+        # Default fallback
+        return "bar"
     
     def _format_for_chart(self, df: pd.DataFrame, chart_type: str) -> Union[List[ChartDataPoint], List[TimeSeriesDataPoint], TableData]:
-        # Handle insight type for single values
+        # Handle when no chart is needed
+        if chart_type == "none":
+            return TableData(
+                columns=df.columns.tolist(),
+                rows=df.values.tolist()
+            )
+        
+        # Handle insight type for single values (legacy support)
         if chart_type == "insight":
-            # For insight type, return the data in table format for easy extraction
             return TableData(
                 columns=df.columns.tolist(),
                 rows=df.values.tolist()
