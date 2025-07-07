@@ -721,9 +721,9 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 quoted_strings.append(match.group(0))
                 return f"__QUOTED_STRING_{len(quoted_strings)-1}__"
             
-            # Preserve both single and double quoted strings
-            sql_query = re.sub(r"'([^']*)'", preserve_quotes, sql_query)
-            sql_query = re.sub(r'"([^"]*)"', preserve_quotes, sql_query)
+            # Preserve all quoted strings in one pass (single quotes, double quotes, including LIKE patterns)
+            sql_query = re.sub(r"'[^']*'", preserve_quotes, sql_query)
+            sql_query = re.sub(r'"[^"]*"', preserve_quotes, sql_query)
             
             # Now clean problematic characters ONLY outside of quotes
             sql_query = sql_query.replace('"', '"').replace('"', '"')
@@ -732,14 +732,29 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             sql_query = sql_query.replace('…', '...')
             
             # Remove any non-ASCII characters except in preserved quoted strings
-            # Keep basic SQL characters and placeholder tokens
+            # Only clean characters that are NOT part of placeholder tokens
             cleaned_chars = []
-            for char in sql_query:
-                if (ord(char) < 128 or char.isspace() or 
-                    sql_query[max(0, sql_query.find(char)-10):sql_query.find(char)+10].find('__QUOTED_STRING_') != -1):
+            i = 0
+            while i < len(sql_query):
+                # Check if we're at the start of a placeholder token
+                if sql_query[i:i+16] == '__QUOTED_STRING_':
+                    # Find the end of this placeholder
+                    end_pos = sql_query.find('__', i + 16)
+                    if end_pos != -1:
+                        # Keep the entire placeholder token as-is
+                        placeholder = sql_query[i:end_pos + 2]
+                        cleaned_chars.append(placeholder)
+                        i = end_pos + 2
+                        continue
+                
+                char = sql_query[i]
+                # For non-placeholder characters, only keep ASCII or whitespace
+                if ord(char) < 128 or char.isspace():
                     cleaned_chars.append(char)
                 else:
-                    cleaned_chars.append(' ')
+                    cleaned_chars.append(' ')  # Replace non-ASCII with space
+                i += 1
+            
             sql_query = ''.join(cleaned_chars)
             
             # Restore quoted strings with their original content (including Arabic)
