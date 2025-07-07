@@ -725,39 +725,12 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             sql_query = re.sub(r"'[^']*'", preserve_quotes, sql_query)
             sql_query = re.sub(r'"[^"]*"', preserve_quotes, sql_query)
             
-            # Now clean problematic characters ONLY outside of quotes
+            # Do minimal cleaning - only fix common quote issues but preserve structure
             sql_query = sql_query.replace('"', '"').replace('"', '"')
             sql_query = sql_query.replace(''', "'").replace(''', "'")
             sql_query = sql_query.replace('–', '-').replace('—', '-')
-            sql_query = sql_query.replace('…', '...')
             
-            # Remove any non-ASCII characters except in preserved quoted strings
-            # Only clean characters that are NOT part of placeholder tokens
-            cleaned_chars = []
-            i = 0
-            while i < len(sql_query):
-                # Check if we're at the start of a placeholder token
-                if sql_query[i:i+16] == '__QUOTED_STRING_':
-                    # Find the end of this placeholder
-                    end_pos = sql_query.find('__', i + 16)
-                    if end_pos != -1:
-                        # Keep the entire placeholder token as-is
-                        placeholder = sql_query[i:end_pos + 2]
-                        cleaned_chars.append(placeholder)
-                        i = end_pos + 2
-                        continue
-                
-                char = sql_query[i]
-                # For non-placeholder characters, only keep ASCII or whitespace
-                if ord(char) < 128 or char.isspace():
-                    cleaned_chars.append(char)
-                else:
-                    cleaned_chars.append(' ')  # Replace non-ASCII with space
-                i += 1
-            
-            sql_query = ''.join(cleaned_chars)
-            
-            # Restore quoted strings with their original content (including Arabic)
+            # Restore quoted strings with their original content (including Arabic) IMMEDIATELY
             for i, quoted_string in enumerate(quoted_strings):
                 sql_query = sql_query.replace(f"__QUOTED_STRING_{i}__", quoted_string)
             
@@ -879,10 +852,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             # Remove any extra whitespace
             sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
-            
-            # Ensure only valid SQL characters remain (letters, numbers, spaces, common SQL punctuation)
-            sql_query = re.sub(r'[^\w\s\(\)\.,=<>!\-\+\*\/\'\"_]', ' ', sql_query)
-            sql_query = ' '.join(sql_query.split())  # Clean up extra spaces
             
             print(f"Debug - Cleaned SQL query: '{sql_query}'")
             
