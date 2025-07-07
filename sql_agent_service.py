@@ -271,6 +271,8 @@ Always format your response to include the SQL query even if you execute it succ
     
     async def query(self, question: str, chart_type: str = "auto") -> QueryResponse:
         try:
+            import re  # Move import to top of method
+            
             schema_info = self.get_table_schema(self.main_table)
             
             # Extract just the column names from schema for clearer reference
@@ -447,7 +449,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             if column_names:
                 query_upper = sql_query.upper()
                 # Split query into tokens more intelligently
-                import re
                 # Use regex to properly tokenize SQL, preserving function calls
                 tokens = re.findall(r'\b\w+\b', sql_query)
                 
