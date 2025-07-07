@@ -357,6 +357,15 @@ FULL SCHEMA:
 
 QUESTION: {question}
 
+COLUMN MAPPING FOR ARABIC TERMS:
+- أمانة/أمانات/Amana/Amanat → AMANA_NAME
+- بلدية/باليديا/Municipality → BALADIA_NAME  
+- منطقة/Region → REGION_NMAE
+- مدينة/City → CITY_NAME
+- نشاط/Activity → D_ACTIVITIES_NAME
+- حالة/Status → LIC_STATUS
+- رخصة/License → LICENSE_ID (for counting)
+
 STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
 1. START WITH "SELECT" - NOTHING ELSE
 2. USE ONLY THESE COLUMN NAMES: {columns_list}
@@ -365,9 +374,10 @@ STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
 5. NO MARKDOWN, NO BACKTICKS, NO EXPLANATIONS
 6. ONLY ASCII CHARACTERS
 
-COMMON PATTERNS:
-- Total count: SELECT COUNT(*) as total_count FROM {self.main_table}
-- Column breakdown: SELECT {column_names[0] if column_names else 'column_name'}, COUNT(*) as count FROM {self.main_table} GROUP BY {column_names[0] if column_names else 'column_name'} ORDER BY count DESC
+COMMON PATTERNS FOR YOUR QUESTION:
+- License distribution by Amana: SELECT AMANA_NAME, COUNT(*) as license_count FROM {self.main_table} GROUP BY AMANA_NAME ORDER BY license_count DESC
+- License distribution by Region: SELECT REGION_NMAE, COUNT(*) as license_count FROM {self.main_table} GROUP BY REGION_NMAE ORDER BY license_count DESC
+- License distribution by Activity: SELECT D_ACTIVITIES_NAME, COUNT(*) as license_count FROM {self.main_table} GROUP BY D_ACTIVITIES_NAME ORDER BY license_count DESC
 
 OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
 
@@ -438,12 +448,30 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 query_upper = sql_query.upper()
                 # Check for invalid column references
                 for word in sql_query.split():
-                    # Skip SQL keywords and table names
-                    if word.upper() not in ['SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'COUNT', 'AS', 'AND', 'OR'] and \
-                       word not in [self.main_table, self.main_table.split('.')[-1]] and \
-                       word.replace(',', '').replace('(', '').replace(')', '') not in column_names and \
-                       not word.isdigit() and len(word) > 2:
-                        print(f"Debug - Detected potentially invalid column: '{word}', falling back to count query")
+                    # Clean the word of punctuation
+                    clean_word = word.replace(',', '').replace('(', '').replace(')', '').replace('*', '').strip()
+                    
+                    # Skip SQL keywords, functions, operators, and table names
+                    sql_keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 
+                                  'AS', 'AND', 'OR', 'DESC', 'ASC', 'HAVING', 'DISTINCT', 'TOP', 'LIMIT', 'ROWNUM']
+                    
+                    if (clean_word.upper() in sql_keywords or 
+                        clean_word in [self.main_table, self.main_table.split('.')[-1]] or
+                        clean_word in column_names or
+                        clean_word.isdigit() or 
+                        len(clean_word) <= 2 or
+                        clean_word == '' or
+                        clean_word.startswith('license_') or  # Allow aliases like license_count
+                        clean_word.startswith('total_') or   # Allow aliases like total_count
+                        clean_word.endswith('_count') or    # Allow any count aliases
+                        clean_word.endswith('_sum') or      # Allow sum aliases
+                        clean_word.endswith('_avg')):       # Allow avg aliases
+                        continue
+                    
+                    # If we get here, it might be an invalid column
+                    print(f"Debug - Checking potentially invalid column: '{clean_word}' from original word '{word}'")
+                    if clean_word not in column_names and clean_word != '':
+                        print(f"Debug - Confirmed invalid column: '{clean_word}', falling back to count query")
                         sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                         break
             
