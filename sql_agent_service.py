@@ -287,6 +287,10 @@ Always format your response to include the SQL query even if you execute it succ
             print(f"Debug - Extracted column names: {column_names}")
             print(f"Debug - Columns list: {columns_list}")
             
+            print(f"Debug - Full schema info:")
+            print(schema_info)
+            print("=" * 50)
+            
             prompt = f"""CRITICAL: Generate ONLY a clean Oracle SQL SELECT statement. No explanations, no markdown, no extra text.
 
 TABLE: {self.main_table}
@@ -375,6 +379,22 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                 print(f"Debug - No FROM clause, using fallback: '{sql_query}'")
             
+            # Validate that only actual columns from the schema are used
+            if column_names:
+                query_upper = sql_query.upper()
+                # Check for invalid column references
+                for word in sql_query.split():
+                    # Skip SQL keywords and table names
+                    if word.upper() not in ['SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'COUNT', 'AS', 'AND', 'OR'] and \
+                       word not in [self.main_table, self.main_table.split('.')[-1]] and \
+                       word.replace(',', '').replace('(', '').replace(')', '') not in column_names and \
+                       not word.isdigit() and len(word) > 2:
+                        print(f"Debug - Detected potentially invalid column: '{word}', falling back to count query")
+                        sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                        break
+            
+            print(f"Debug - FINAL SQL TO EXECUTE: '{sql_query}'")
+            
             # Validate the query starts with SELECT
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
                 return QueryResponse(
@@ -404,15 +424,22 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             try:
                 # Use direct Oracle connection for query execution
                 cursor = self.oracle_connection.cursor()
+                print(f"Debug - About to execute query: {sql_query}")
+                
                 cursor.execute(sql_query)
+                print(f"Debug - Query executed successfully!")
                 
                 # Fetch results and convert to DataFrame
                 columns = [desc[0] for desc in cursor.description]
+                print(f"Debug - Result columns: {columns}")
+                
                 rows = cursor.fetchall()
+                print(f"Debug - Fetched {len(rows)} rows")
+                
                 cursor.close()
                 
                 df = pd.DataFrame(rows, columns=columns)
-                print(f"Debug - Query returned {len(df)} rows using direct Oracle connection")
+                print(f"Debug - DataFrame created with {len(df)} rows and columns: {df.columns.tolist()}")
                 
                 if df.empty:
                     return QueryResponse(
@@ -444,14 +471,17 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 )
                 
             except Exception as data_error:
-                print(f"Debug - Oracle data processing error: {str(data_error)}")
+                print(f"Debug - Oracle execution error details:")
+                print(f"  - Error type: {type(data_error).__name__}")
+                print(f"  - Error message: {str(data_error)}")
+                print(f"  - Query that failed: {sql_query}")
                 return QueryResponse(
                     success=False,
                     data=None,
                     chart_type="table",
                     insights=None,
                     message="Failed to process Oracle query results",
-                    error=str(data_error)
+                    error=f"SQL: {sql_query} | Error: {str(data_error)}"
                 )
                 
         except Exception as e:
