@@ -287,6 +287,60 @@ Always format your response to include the SQL query even if you execute it succ
             print(f"Debug - Extracted column names: {column_names}")
             print(f"Debug - Columns list: {columns_list}")
             
+            # If no columns extracted, force a simple count query
+            if not column_names:
+                print("Debug - No columns extracted, forcing simple count query")
+                sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
+                print(f"Debug - Using safe fallback query: {sql_query}")
+                
+                try:
+                    # Execute the safe query directly
+                    cursor = self.oracle_connection.cursor()
+                    print(f"Debug - About to execute fallback query: {sql_query}")
+                    
+                    cursor.execute(sql_query)
+                    print(f"Debug - Fallback query executed successfully!")
+                    
+                    # Fetch results and convert to DataFrame
+                    columns = [desc[0] for desc in cursor.description]
+                    print(f"Debug - Result columns: {columns}")
+                    
+                    rows = cursor.fetchall()
+                    print(f"Debug - Fetched {len(rows)} rows")
+                    
+                    cursor.close()
+                    
+                    df = pd.DataFrame(rows, columns=columns)
+                    print(f"Debug - DataFrame created with {len(df)} rows and columns: {df.columns.tolist()}")
+                    
+                    if chart_type == "auto":
+                        detected_chart_type = self._detect_chart_type(df, question)
+                    else:
+                        detected_chart_type = chart_type
+                    
+                    chart_data = self._format_for_chart(df, detected_chart_type)
+                    insights = self._generate_insights(df, detected_chart_type, question)
+                    
+                    return QueryResponse(
+                        success=True,
+                        data=chart_data,
+                        chart_type=detected_chart_type,
+                        insights=insights,
+                        message="Query executed successfully using fallback",
+                        error=None
+                    )
+                    
+                except Exception as fallback_error:
+                    print(f"Debug - Even fallback query failed: {fallback_error}")
+                    return QueryResponse(
+                        success=False,
+                        data=None,
+                        chart_type="table",
+                        insights=None,
+                        message="Failed to execute even simple count query",
+                        error=str(fallback_error)
+                    )
+            
             print(f"Debug - Full schema info:")
             print(schema_info)
             print("=" * 50)
@@ -575,7 +629,10 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
                 schema = 'AI_USER'
                 table = table_name
             
-            cursor.execute("""
+            print(f"Debug - Querying schema for: schema='{schema}', table='{table}'")
+            
+            # Use simpler query without bind variables to avoid ORA-01745
+            schema_query = f"""
                 SELECT 
                     COLUMN_NAME,
                     DATA_TYPE,
@@ -585,12 +642,16 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
                     NULLABLE,
                     DATA_DEFAULT
                 FROM ALL_TAB_COLUMNS 
-                WHERE OWNER = :schema 
-                AND TABLE_NAME = :table
+                WHERE OWNER = '{schema}' 
+                AND TABLE_NAME = '{table}'
                 ORDER BY COLUMN_ID
-            """, {'schema': schema, 'table': table})
+            """
+            
+            print(f"Debug - Executing schema query: {schema_query}")
+            cursor.execute(schema_query)
             
             columns = cursor.fetchall()
+            print(f"Debug - Found {len(columns)} columns")
             
             if not columns:
                 cursor.close()
@@ -618,13 +679,16 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
                 cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
                 row_count = cursor.fetchone()[0]
                 schema_info += f"\nRow Count: {row_count:,}\n"
-            except:
+            except Exception as count_error:
+                print(f"Debug - Could not get row count: {count_error}")
                 schema_info += f"\nRow Count: Unable to retrieve\n"
             
             cursor.close()
+            print(f"Debug - Schema info successfully retrieved")
             return schema_info
             
         except Exception as e:
+            print(f"Debug - Schema query error: {str(e)}")
             return f"Materialized View: {table_name}\nError getting schema: {str(e)}"
     
     def get_database_info(self) -> Dict[str, Any]:
