@@ -137,17 +137,41 @@ COLUMN MAPPING FOR ARABIC TERMS:
 - حالة/Status → LIC_STATUS
 - رخصة/License → LICENSE_ID (for counting)
 
-CITY NAME MAPPING (use exact database spellings):
-- الرياض/Riyadh → الرياض
-- جده/جدة/Jeddah → جدة  
-- مكة/Mecca/Makkah → أمانة العاصمة المقدسة
-- المدينة/Medina → أمانة المدينة المنورة
-- الدمام/Dammam → الدمام
-- تبوك/Tabuk → تبوك
-- جيزان/Jazan → جيزان
-- أبها/Abha → أبها
-- حائل/Hail → حائل
-- الباحة/Al Baha → الباحة"""
+IMPORTANT: HANDLING STRING COLUMNS WITH TRAILING SPACES
+For all string columns (CITY_NAME, AMANA_NAME, BALADIA_NAME, REGION_NMAE, etc.), use LIKE patterns to handle potential leading and trailing spaces:
+
+GENERIC PATTERN FOR STRING MATCHING:
+- Instead of: COLUMN_NAME = 'value'
+- Use: COLUMN_NAME LIKE '%value%'
+
+EXAMPLES:
+- CITY_NAME LIKE '%الرياض%' (instead of CITY_NAME = 'الرياض')
+- AMANA_NAME LIKE '%أمانة منطقة الرياض%' (instead of exact match)
+- BALADIA_NAME LIKE '%بلدية الخبر%' (handles leading and trailing spaces)
+
+FOR IN CLAUSES WITH STRING COLUMNS:
+- Instead of: CITY_NAME IN ('الرياض', 'جده')
+- Use: (CITY_NAME LIKE '%الرياض%' OR CITY_NAME LIKE '%جده%')
+
+SPECIAL CITY NAME MAPPINGS:
+- مكة/Mecca/Makkah → Use AMANA_NAME LIKE '%أمانة العاصمة المقدسة%'
+- المدينة/Medina → Use AMANA_NAME LIKE '%أمانة المدينة المنورة%'
+
+STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
+1. START WITH "SELECT" - NOTHING ELSE
+2. USE ONLY THESE COLUMN NAMES: {columns_list}
+3. USE EXACT TABLE NAME: {self.main_table}
+4. NO SEMICOLONS AT END
+5. NO MARKDOWN, NO BACKTICKS, NO EXPLANATIONS
+6. ONLY ASCII CHARACTERS
+7. USE LIKE '%value%' FOR ALL STRING COLUMN COMPARISONS
+
+COMMON PATTERNS FOR YOUR QUESTION:
+- License distribution by Amana: SELECT AMANA_NAME, COUNT(*) as license_count FROM {self.main_table} GROUP BY AMANA_NAME ORDER BY license_count DESC
+- License distribution by Region: SELECT REGION_NMAE, COUNT(*) as license_count FROM {self.main_table} GROUP BY REGION_NMAE ORDER BY license_count DESC
+- License distribution by Activity: SELECT D_ACTIVITIES_NAME, COUNT(*) as license_count FROM {self.main_table} GROUP BY D_ACTIVITIES_NAME ORDER BY license_count DESC
+
+OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 
                 self.agent_executor = create_sql_agent(
                     llm=self.llm,
@@ -408,8 +432,6 @@ CITY NAME MAPPING (use exact database spellings):
             print(schema_info)
             print("=" * 50)
             
-            # Multi-place intelligent query handling - moved here before prompt creation
-            # Extract place names from the question for smart column detection
             def extract_places_from_question(question_text):
                 # Real Saudi places from actual commercial licenses data (201,760 records)
                 place_categories = {
@@ -592,10 +614,21 @@ CITY NAME MAPPING (use exact database spellings):
                     where_conditions = []
                     for column, places in places_by_column.items():
                         if len(places) == 1:
-                            where_conditions.append(f"{column} = '{places[0]}'")
+                            place = places[0]
+                            # Use LIKE for all string columns to handle leading and trailing spaces
+                            if column in ['CITY_NAME', 'AMANA_NAME', 'BALADIA_NAME', 'REGION_NMAE', 'D_ACTIVITIES_NAME']:
+                                where_conditions.append(f"{column} LIKE '%{place}%'")
+                            else:
+                                where_conditions.append(f"{column} = '{place}'")
                         else:
-                            places_str = "', '".join(places)
-                            where_conditions.append(f"{column} IN ('{places_str}')")
+                            # Handle multiple places in same column
+                            place_conditions = []
+                            for place in places:
+                                if column in ['CITY_NAME', 'AMANA_NAME', 'BALADIA_NAME', 'REGION_NMAE', 'D_ACTIVITIES_NAME']:
+                                    place_conditions.append(f"{column} LIKE '%{place}%'")
+                                else:
+                                    place_conditions.append(f"{column} = '{place}'")
+                            where_conditions.append(f"({' OR '.join(place_conditions)})")
                     
                     multi_column_where = " OR ".join(where_conditions)
                     print(f"Debug - Multi-column WHERE clause needed: ({multi_column_where})")
@@ -631,17 +664,25 @@ COLUMN MAPPING FOR ARABIC TERMS:
 - حالة/Status → LIC_STATUS
 - رخصة/License → LICENSE_ID (for counting)
 
-CITY NAME MAPPING (use exact database spellings):
-- الرياض/Riyadh → الرياض
-- جده/جدة/Jeddah → جدة  
-- مكة/Mecca/Makkah → أمانة العاصمة المقدسة
-- المدينة/Medina → أمانة المدينة المنورة
-- الدمام/Dammam → الدمام
-- تبوك/Tabuk → تبوك
-- جيزان/Jazan → جيزان
-- أبها/Abha → أبها
-- حائل/Hail → حائل
-- الباحة/Al Baha → الباحة
+IMPORTANT: HANDLING STRING COLUMNS WITH TRAILING SPACES
+For all string columns (CITY_NAME, AMANA_NAME, BALADIA_NAME, REGION_NMAE, etc.), use LIKE patterns to handle potential leading and trailing spaces:
+
+GENERIC PATTERN FOR STRING MATCHING:
+- Instead of: COLUMN_NAME = 'value'
+- Use: COLUMN_NAME LIKE '%value%'
+
+EXAMPLES:
+- CITY_NAME LIKE '%الرياض%' (instead of CITY_NAME = 'الرياض')
+- AMANA_NAME LIKE '%أمانة منطقة الرياض%' (instead of exact match)
+- BALADIA_NAME LIKE '%بلدية الخبر%' (handles leading and trailing spaces)
+
+FOR IN CLAUSES WITH STRING COLUMNS:
+- Instead of: CITY_NAME IN ('الرياض', 'جده')
+- Use: (CITY_NAME LIKE '%الرياض%' OR CITY_NAME LIKE '%جده%')
+
+SPECIAL CITY NAME MAPPINGS:
+- مكة/Mecca/Makkah → Use AMANA_NAME LIKE '%أمانة العاصمة المقدسة%'
+- المدينة/Medina → Use AMANA_NAME LIKE '%أمانة المدينة المنورة%'
 
 STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
 1. START WITH "SELECT" - NOTHING ELSE
@@ -650,6 +691,7 @@ STRICT RULES - VIOLATE ANY RULE AND SYSTEM FAILS:
 4. NO SEMICOLONS AT END
 5. NO MARKDOWN, NO BACKTICKS, NO EXPLANATIONS
 6. ONLY ASCII CHARACTERS
+7. USE LIKE '%value%' FOR ALL STRING COLUMN COMPARISONS
 
 COMMON PATTERNS FOR YOUR QUESTION:
 - License distribution by Amana: SELECT AMANA_NAME, COUNT(*) as license_count FROM {self.main_table} GROUP BY AMANA_NAME ORDER BY license_count DESC
@@ -704,19 +746,26 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             for i, quoted_string in enumerate(quoted_strings):
                 sql_query = sql_query.replace(f"__QUOTED_STRING_{i}__", quoted_string)
             
-            # Fix common Arabic city name variations
+            # Fix common Arabic city name variations using LIKE for better matching
             city_name_corrections = {
-                "'جده'": "'جدة'",  # Jeddah correction
-                "'مكة'": "'أمانة العاصمة المقدسة'",  # Mecca correction
-                "'المدينة'": "'أمانة المدينة المنورة'",  # Medina correction
-                "('جده')": "('جدة')",  # In parentheses
-                "('مكة')": "('أمانة العاصمة المقدسة')",
-                "('المدينة')": "('أمانة المدينة المنورة')",
-                ", 'جده')": ", 'جدة')",  # In lists
-                ", 'مكة')": ", 'أمانة العاصمة المقدسة')",
-                ", 'المدينة')": ", 'أمانة المدينة المنورة')",
-                "('الرياض', 'جده')": "('الرياض', 'جدة')",  # Common pairs
-                "('جده', 'الرياض')": "('جدة', 'الرياض')"
+                "= 'جده'": "LIKE 'جده%'",  # Jeddah with LIKE to handle trailing spaces
+                "= 'جدة'": "LIKE 'جده%'",  # Alternative spelling to LIKE pattern
+                "= 'مكة'": "= 'أمانة العاصمة المقدسة'",  # Mecca correction (exact for amana)
+                "= 'المدينة'": "= 'أمانة المدينة المنورة'",  # Medina correction (exact for amana)
+                "IN ('جده')": "LIKE 'جده%'",  # Handle IN clauses with LIKE
+                "IN ('جدة')": "LIKE 'جده%'",  # Alternative spelling in IN clause
+                "IN ('مكة')": "IN ('أمانة العاصمة المقدسة')",
+                "IN ('المدينة')": "IN ('أمانة المدينة المنورة')",
+                # Handle multiple values in IN clauses
+                "IN ('الرياض', 'جده')": "IN ('الرياض') OR CITY_NAME LIKE 'جده%'",
+                "IN ('جده', 'الرياض')": "LIKE 'جده%' OR CITY_NAME IN ('الرياض')",
+                "IN ('الرياض', 'جدة')": "IN ('الرياض') OR CITY_NAME LIKE 'جده%'",
+                "IN ('جدة', 'الرياض')": "LIKE 'جده%' OR CITY_NAME IN ('الرياض')",
+                # Handle AMANA_NAME for Jeddah
+                "AMANA_NAME = 'جده'": "AMANA_NAME LIKE '%جدة%'",
+                "AMANA_NAME = 'جدة'": "AMANA_NAME LIKE '%جدة%'",
+                "AMANA_NAME IN ('جده')": "AMANA_NAME LIKE '%جدة%'",
+                "AMANA_NAME IN ('جدة')": "AMANA_NAME LIKE '%جدة%'"
             }
             
             # Administrative level mapping for intelligent error handling
