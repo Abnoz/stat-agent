@@ -273,61 +273,33 @@ Always format your response to include the SQL query even if you execute it succ
         try:
             schema_info = self.get_table_schema(self.main_table)
             
-            prompt = f"""You are a SQL expert analyzing commercial licensing data from Oracle materialized views. Given the database schema and a question, generate ONLY the SQL query.
+            prompt = f"""You are a SQL expert analyzing commercial licensing data from Oracle materialized views. Generate ONLY a valid Oracle SQL SELECT statement using the EXACT column names provided below.
+
+IMPORTANT: You MUST use the EXACT column names as they appear in the schema. DO NOT create placeholder names or generic names.
 
 Database Schema for '{self.main_table}':
 {schema_info}
 
-COLUMN UNDERSTANDING FOR ORACLE MATERIALIZED VIEWS:
-- Use actual column names from the materialized view schema
-- For date operations, use Oracle functions: TO_DATE, TRUNC, SYSDATE, etc.
-- For limiting results, use ROWNUM instead of LIMIT
-- For null handling, use NVL or NVL2
+CRITICAL RULES:
+1. Use ONLY the column names listed in the schema above - no other column names are allowed
+2. Always use the full table name: {self.main_table}
+3. For limiting results: WHERE ROWNUM <= 10
+4. For counts: SELECT column_name, COUNT(*) FROM table GROUP BY column_name
+5. For simple totals: SELECT COUNT(*) as total_count FROM table
+6. Always include meaningful column aliases in your SELECT
+7. DO NOT use semicolons at the end
+8. DO NOT use placeholder column names like "business_type_column" - use actual column names from schema
 
-INTELLIGENT ANALYSIS APPROACH:
-- When asked about "active vs expired/inactive", analyze based on:
-  1. Current license status values AND/OR
-  2. Compare expiration dates with SYSDATE
-  3. Use the data to determine what constitutes "active" vs "expired"
-- For status analysis, examine actual status values in the data
-- For geographic analysis, choose appropriate geographic columns
-- For business analysis, use business type/category columns
-- For temporal analysis, use appropriate date columns
-
-ARABIC/MULTILINGUAL SUPPORT:
-- Understand questions in Arabic and English
-- Map Arabic business concepts to appropriate columns:
-  - تاريخ/dates → date columns
-  - منطقة/region → region/geographic columns
-  - نشاط/business → business type columns
-  - حالة/status → status columns
-  - مدينة/city → city/location columns
-  - فعال/active → determine from status and/or dates
-  - منتهي/expired → determine from status and/or dates
-
-ORACLE SQL SPECIFIC REQUIREMENTS:
-1. Use ROWNUM for limiting: WHERE ROWNUM <= 10
-2. Use Oracle date functions: TRUNC(date_column), TO_CHAR(date_column, 'YYYY-MM')
-3. Use NVL for null handling: NVL(column, 'default_value')
-4. For date comparisons: date_column >= SYSDATE or date_column < SYSDATE
-5. Always return at least 2 columns for visualization
-6. Use meaningful column aliases (e.g., 'license_count', 'status_type')
-7. For status breakdowns, use CASE statements with descriptive labels
-8. For counts, include category labels not just numbers
-9. Group and order results logically
-10. END ALL STATEMENTS WITH SEMICOLON REMOVED - Oracle doesn't need semicolons in embedded SQL
+QUERY PATTERNS:
+- For total counts: SELECT COUNT(*) as total_licenses FROM {self.main_table}
+- For breakdowns: SELECT actual_column_name, COUNT(*) as count FROM {self.main_table} GROUP BY actual_column_name ORDER BY count DESC
+- For top results: SELECT * FROM (SELECT columns FROM {self.main_table} ORDER BY some_column) WHERE ROWNUM <= 10
 
 Question: {question}
 
-CONSTRAINTS:
-- Query '{self.main_table}' materialized view ONLY
-- Generate SELECT statements only
-- Use Oracle SQL syntax
-- Use column names exactly as they appear in schema
-- Return results suitable for chart visualization (2+ columns)
-- DO NOT include semicolons at the end
+Based on the schema above, generate a valid Oracle SQL SELECT statement that answers this question. Use ONLY the column names that exist in the schema.
 
-Generate the Oracle SQL query that best answers this question:"""
+SQL Query:"""
 
             sql_response = self.llm.invoke(prompt)
             sql_query = sql_response.content.strip()
