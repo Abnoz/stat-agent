@@ -997,7 +997,7 @@ Provide intelligent insights that include:
 5. License distribution insights
 6. Recommendations or observations
 
-Keep the response concise (2-3 sentences) and focus on actionable insights. Use both Arabic and English terms when appropriate. Provide meaningful business intelligence rather than just data description."""
+Keep the response concise (2-3 sentences) and focus on actionable insights. Use only Arabic . Provide meaningful business intelligence rather than just data description."""
 
             insights_response = self.llm.invoke(insights_prompt)
             return insights_response.content.strip()
