@@ -379,12 +379,15 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     chart_data = self._format_for_chart(df, detected_chart_type)
                     insights = self._generate_insights(df, detected_chart_type, question)
                     
+                    related_analysis = self._generate_related_analysis(df, question, schema_info)
+                    
                     return QueryResponse(
                         success=True,
                         data=chart_data,
                         chart_type=detected_chart_type,
                         insights=insights,
-                        message="Query executed successfully using fallback",
+                        related_analysis=related_analysis,
+                        message="Query executed successfully",
                         error=None
                     )
                     
@@ -906,6 +909,7 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                         data=None,
                         chart_type="table",
                         insights="No data available for this question. The query executed successfully but found no records matching the specified criteria in the database.",
+                        related_analysis=self._generate_related_analysis(df, question, schema_info),
                         message="No data available for this question",
                         error=None
                     )
@@ -919,11 +923,14 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 
                 insights = self._generate_insights(df, detected_chart_type, question)
                 
+                related_analysis = self._generate_related_analysis(df, question, schema_info)
+                
                 return QueryResponse(
                     success=True,
                     data=chart_data,
                     chart_type=detected_chart_type,
                     insights=insights,
+                    related_analysis=related_analysis,
                     message="Query executed successfully",
                     error=None
                 )
@@ -1119,3 +1126,37 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
         except Exception as e:
             print(f"❌ Oracle connection failed: {str(e)}")
             return False 
+    
+    def _generate_related_analysis(self, df: pd.DataFrame, question: str, schema_info: str) -> List[str]:
+        try:
+            related_prompt = f"""Based on the commercial licensing data analysis and the original question, generate 5-8 suggested follow-up questions for deeper analysis.
+
+Original Question: {question}
+Data Shape: {len(df)} rows, {len(df.columns)} columns
+Available Schema: {schema_info}
+
+Generate suggested questions that would provide:
+1. Deeper geographic analysis (by city, amana, region)
+2. Business activity breakdowns
+3. Temporal analysis (by date ranges, periods)
+4. License status analysis
+5. Comparative analysis between different entities
+6. Trend analysis over time
+7. Statistical insights and patterns
+8. Business intelligence questions
+
+Format each question in Arabic and make them specific to the data available. Focus on questions that would reveal meaningful business insights.
+
+Return only the questions, one per line, without numbering or additional text."""
+
+            related_response = self.llm.invoke(related_prompt)
+            questions = [q.strip() for q in related_response.content.strip().split('\n') if q.strip()]
+            return questions[:8]  # Limit to 8 questions
+            
+        except Exception as e:
+            return [
+                "ما هو توزيع التراخيص التجارية حسب النشاط؟",
+                "أي مدينة لديها أكبر عدد من التراخيص النشطة؟",
+                "ما هو متوسط عدد التراخيص لكل منطقة؟",
+                "كيف يتوزع النشاط التجاري حسب البلدية؟"
+            ]

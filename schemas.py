@@ -25,6 +25,7 @@ class QueryResponse(BaseModel):
     data: Optional[Union[List[ChartDataPoint], List[TimeSeriesDataPoint], TableData]] = Field(None, description="Chart-ready data")
     chart_type: str = Field(..., description="Recommended chart type")
     insights: Optional[str] = Field(None, description="AI-generated insights about the data and chart")
+    related_analysis: Optional[List[str]] = Field(None, description="Suggested follow-up questions for deeper analysis")
     message: str = Field(..., description="Response message")
     error: Optional[str] = Field(None, description="Error message if any")
 
