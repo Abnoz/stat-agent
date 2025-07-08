@@ -18,12 +18,10 @@ load_dotenv()
 
 class SQLAgentService:
     def __init__(self, database_url=None):
-        # Oracle connection configuration - using direct connection like your test
         self.official_tns = """(DESCRIPTION=(ADDRESS_LIST=(FAILOVER=ON)(LOAD_BALANCE=ON)(ADDRESS=(PROTOCOL=TCP)(HOST=ruhmpp-exa-scan.momra.net)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=drmpp-exa-scan.momra.net)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=MEDIUM_AIDBPRO.momra.net)(FAILOVER_MODE=(TYPE=select)(METHOD=basic))))"""
         self.db_user = os.getenv('DB_USER', 'AI_READ')
         self.db_password = os.getenv('DB_PASSWORD', 'Ai2025aI')
         
-        # Materialized views available
         self.materialized_views = [
             "AI_USER.COMMERCIAL_LICENSE_MV",
             "AI_USER.COM_LIC_ADDITIONAL_ACTIVITY_MV", 
@@ -40,13 +38,12 @@ class SQLAgentService:
         
         self.db = None
         self.oracle_connection = None
-        self.main_table = "AI_USER.COMMERCIAL_LICENSE_MV"  # Primary table for commercial data
+        self.main_table = "AI_USER.COMMERCIAL_LICENSE_MV"
         self._setup_oracle_connection()
         self._setup_database_connection()
         self._create_agent()
     
     def _setup_oracle_connection(self):
-        """Setup direct Oracle connection for queries"""
         try:
             self.oracle_connection = oracledb.connect(
                 user=self.db_user,
@@ -58,32 +55,25 @@ class SQLAgentService:
             raise ConnectionError(f"Failed to establish direct Oracle connection: {str(e)}")
     
     def _build_oracle_url(self):
-        """Create Oracle connection URL for SQLAlchemy"""
         return f"oracle+oracledb://{self.db_user}:{self.db_password}@{self.official_tns}"
     
     def _setup_database_connection(self):
-        """Setup SQLAlchemy connection for LangChain agent"""
         try:
             database_url = self._build_oracle_url()
             engine = create_engine(database_url)
-            # Include all materialized views in the database connection
             self.db = SQLDatabase(engine, include_tables=self.materialized_views)
             print("✅ SQLAlchemy Oracle connection established for LangChain")
         except Exception as e:
             print(f"⚠️ SQLAlchemy connection failed, will use direct Oracle connection: {str(e)}")
-            # We can still proceed with direct Oracle connection for queries
     
     def _create_agent(self):
-        # Get schema for primary commercial table
         commercial_schema = self.get_table_schema(self.main_table)
         
-        # Get schemas for all available materialized views
         all_schemas = ""
         for mv in self.materialized_views:
             mv_schema = self.get_table_schema(mv)
             all_schemas += f"\n{mv_schema}\n"
         
-        # Only create LangChain agent if SQLAlchemy connection is available
         if self.db is not None:
             try:
                 toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
@@ -194,33 +184,22 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
     def _detect_chart_type(self, df: pd.DataFrame, question: str) -> str:
         question_lower = question.lower()
         
-        # Single value responses - no chart needed
-        if len(df.columns) == 1 and len(df) == 1:
-            return "none"  # No chart needed for single values
-        
-        # Single value with 2 columns (label + value) - no chart needed
-        if len(df.columns) == 2 and len(df) == 1:
-            return "none"  # No chart needed for single values
-        
-        # Single column with single row - usually a summary statistic
         if len(df.columns) == 1 and len(df) == 1:
             return "none"
         
-        # Single column with multiple rows - could be a list, but check context
-        if len(df.columns) == 1:
-            # If it's just a list of values without clear categories, might not need a chart
-            if len(df) > 50:  # Too many items for effective visualization
-                return "table"
-            return "bar"  # Simple bar chart for single column with multiple values
+        if len(df.columns) == 2 and len(df) == 1:
+            return "none"
         
-        # Two columns where one is clearly a count/total - good for charts
+        if len(df.columns) == 1:
+            if len(df) > 50:
+                return "table"
+            return "bar"
+        
         if len(df.columns) == 2:
             numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
             text_cols = df.select_dtypes(include=['object']).columns
             
-            # Perfect for charts: category + numeric value
             if len(numeric_cols) == 1 and len(text_cols) == 1:
-                # Check for different chart types based on context
                 trend_keywords = ['trend', 'over time', 'timeline', 'monthly', 'daily', 'yearly', 'اتجاه', 'مع الوقت', 'شهريا', 'سنويا', 'تطور']
                 percentage_keywords = ['percentage', 'proportion', 'share', 'distribution', 'نسبة', 'توزيع', 'حصة']
                 comparison_keywords = ['compare', 'comparison', 'top', 'highest', 'lowest', 'مقارنة', 'أعلى', 'أقل', 'الأكثر', 'الأقل']
@@ -231,37 +210,32 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     return "pie"
                 elif any(word in question_lower for word in comparison_keywords):
                     return "bar"
-                elif len(df) <= 10:  # Small number of categories - good for pie
+                elif len(df) <= 10:
                     return "pie"
                 else:
-                    return "bar"  # Default for category + value
+                    return "bar"
         
-        # Multiple columns - usually better as table unless specifically requested
         if len(df.columns) > 2:
             chart_keywords = ['chart', 'graph', 'visualize', 'plot', 'رسم', 'مخطط', 'رسم بياني']
             if any(word in question_lower for word in chart_keywords):
-                return "bar"  # User explicitly wants a chart
-            elif len(df) > 20:  # Too much data for effective charting
+                return "bar"
+            elif len(df) > 20:
                 return "table"
             else:
-                return "table"  # Default to table for complex data
+                return "table"
         
-        # Large datasets - prefer table
         if len(df) > 50:
             return "table"
         
-        # Default fallback
         return "bar"
     
     def _format_for_chart(self, df: pd.DataFrame, chart_type: str) -> Union[List[ChartDataPoint], List[TimeSeriesDataPoint], TableData]:
-        # Handle when no chart is needed
         if chart_type == "none":
             return TableData(
                 columns=df.columns.tolist(),
                 rows=df.values.tolist()
             )
         
-        # Handle insight type for single values (legacy support)
         if chart_type == "insight":
             return TableData(
                 columns=df.columns.tolist(),
@@ -275,7 +249,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             )
         
         if len(df.columns) < 2:
-            # If we have less than 2 columns but chart_type is not insight, convert to table
             return TableData(
                 columns=df.columns.tolist(),
                 rows=df.values.tolist()
@@ -358,11 +331,10 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
     
     async def query(self, question: str, chart_type: str = "auto") -> QueryResponse:
         try:
-            import re  # Move import to top of method
+            import re
             
             schema_info = self.get_table_schema(self.main_table)
             
-            # Extract just the column names from schema for clearer reference
             column_names = []
             if "Columns:" in schema_info:
                 lines = schema_info.split('\n')
@@ -376,21 +348,18 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             print(f"Debug - Extracted column names: {column_names}")
             print(f"Debug - Columns list: {columns_list}")
             
-            # If no columns extracted, force a simple count query
             if not column_names:
                 print("Debug - No columns extracted, forcing simple count query")
                 sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                 print(f"Debug - Using safe fallback query: {sql_query}")
                 
                 try:
-                    # Execute the safe query directly
                     cursor = self.oracle_connection.cursor()
                     print(f"Debug - About to execute fallback query: {sql_query}")
                     
                     cursor.execute(sql_query)
                     print(f"Debug - Fallback query executed successfully!")
                     
-                    # Fetch results and convert to DataFrame
                     columns = [desc[0] for desc in cursor.description]
                     print(f"Debug - Result columns: {columns}")
                     
@@ -435,7 +404,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             print("=" * 50)
             
             def extract_places_from_question(question_text):
-                # Real Saudi places from actual commercial licenses data (201,760 records)
                 place_categories = {
                     'regions': [
                         'الباحة', 'الجوف', 'الحدود الشمالية', 'الرياض', 'الشرقية', 'القصيم',
@@ -586,21 +554,19 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                                 'column': {
                                     'cities': 'CITY_NAME',
                                     'amanas': 'AMANA_NAME', 
-                                    'regions': 'REGION_NMAE',  # Note: typo in actual column name
+                                    'regions': 'REGION_NMAE', 
                                     'baladias': 'BALADIA_NAME'
                                 }[category]
                             })
                 
                 return found_places
             
-            # Check if query contains multiple places that might be in different columns
             found_places = extract_places_from_question(question)
             additional_prompt = ""
             
             if len(found_places) > 1:
                 print(f"Debug - Found multiple places: {found_places}")
                 
-                # Group places by their administrative column
                 places_by_column = {}
                 for place_info in found_places:
                     column = place_info['column']
@@ -610,20 +576,16 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 
                 print(f"Debug - Places grouped by column: {places_by_column}")
                 
-                # If places span multiple columns, we need to build a more complex WHERE clause
                 if len(places_by_column) > 1:
-                    # Build OR conditions for different columns
                     where_conditions = []
                     for column, places in places_by_column.items():
                         if len(places) == 1:
                             place = places[0]
-                            # Use LIKE for all string columns to handle leading and trailing spaces
                             if column in ['CITY_NAME', 'AMANA_NAME', 'BALADIA_NAME', 'REGION_NMAE', 'D_ACTIVITIES_NAME']:
                                 where_conditions.append(f"{column} LIKE '%{place}%'")
                             else:
                                 where_conditions.append(f"{column} = '{place}'")
                         else:
-                            # Handle multiple places in same column
                             place_conditions = []
                             for place in places:
                                 if column in ['CITY_NAME', 'AMANA_NAME', 'BALADIA_NAME', 'REGION_NMAE', 'D_ACTIVITIES_NAME']:
@@ -635,7 +597,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     multi_column_where = " OR ".join(where_conditions)
                     print(f"Debug - Multi-column WHERE clause needed: ({multi_column_where})")
                     
-                    # Modify the prompt to include smart WHERE clause guidance
                     additional_prompt = f"""
 IMPORTANT: Multiple places detected that exist in different administrative levels:
 {places_by_column}
@@ -706,7 +667,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             raw_sql = sql_response.content.strip()
             print(f"Debug - Raw LLM response: '{raw_sql}'")
             
-            # Clean up the response more thoroughly
             sql_query = re.sub(r'^```sql\s*', '', raw_sql, flags=re.IGNORECASE)
             sql_query = re.sub(r'\s*```$', '', sql_query)
             sql_query = re.sub(r'^```\s*', '', sql_query)
@@ -714,80 +674,65 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             sql_query = re.sub(r'^SQL Query:\s*', '', sql_query, flags=re.IGNORECASE)
             sql_query = re.sub(r'^Query:\s*', '', sql_query, flags=re.IGNORECASE)
             
-            # Remove trailing semicolons that cause ORA-00933
             sql_query = re.sub(r';\s*$', '', sql_query)
             
-            # PRESERVE QUOTED STRINGS (including Arabic text) before cleaning
             quoted_strings = []
             def preserve_quotes(match):
                 quoted_strings.append(match.group(0))
                 return f"__QUOTED_STRING_{len(quoted_strings)-1}__"
             
-            # Preserve all quoted strings in one pass (single quotes, double quotes, including LIKE patterns)
             sql_query = re.sub(r"'[^']*'", preserve_quotes, sql_query)
             sql_query = re.sub(r'"[^"]*"', preserve_quotes, sql_query)
             
-            # Do minimal cleaning - only fix common quote issues but preserve structure
             sql_query = sql_query.replace('"', '"').replace('"', '"')
             sql_query = sql_query.replace(''', "'").replace(''', "'")
             sql_query = sql_query.replace('–', '-').replace('—', '-')
             
-            # Restore quoted strings with their original content (including Arabic) IMMEDIATELY
             for i, quoted_string in enumerate(quoted_strings):
                 sql_query = sql_query.replace(f"__QUOTED_STRING_{i}__", quoted_string)
             
-            # Fix common Arabic city name variations using LIKE for better matching
             city_name_corrections = {
-                "= 'جده'": "LIKE 'جده%'",  # Jeddah with LIKE to handle trailing spaces
-                "= 'جدة'": "LIKE 'جده%'",  # Alternative spelling to LIKE pattern
-                "= 'مكة'": "= 'أمانة العاصمة المقدسة'",  # Mecca correction (exact for amana)
-                "= 'المدينة'": "= 'أمانة المدينة المنورة'",  # Medina correction (exact for amana)
-                "IN ('جده')": "LIKE 'جده%'",  # Handle IN clauses with LIKE
-                "IN ('جدة')": "LIKE 'جده%'",  # Alternative spelling in IN clause
+                "= 'جده'": "LIKE 'جده%'",
+                "= 'جدة'": "LIKE 'جده%'",
+                "= 'مكة'": "= 'أمانة العاصمة المقدسة'",
+                "= 'المدينة'": "= 'أمانة المدينة المنورة'",
+                "IN ('جده')": "LIKE 'جده%'",
+                "IN ('جدة')": "LIKE 'جده%'",
                 "IN ('مكة')": "IN ('أمانة العاصمة المقدسة')",
                 "IN ('المدينة')": "IN ('أمانة المدينة المنورة')",
-                # Handle multiple values in IN clauses
                 "IN ('الرياض', 'جده')": "IN ('الرياض') OR CITY_NAME LIKE 'جده%'",
                 "IN ('جده', 'الرياض')": "LIKE 'جده%' OR CITY_NAME IN ('الرياض')",
                 "IN ('الرياض', 'جدة')": "IN ('الرياض') OR CITY_NAME LIKE 'جده%'",
                 "IN ('جدة', 'الرياض')": "LIKE 'جده%' OR CITY_NAME IN ('الرياض')",
-                # Handle AMANA_NAME for Jeddah
                 "AMANA_NAME = 'جده'": "AMANA_NAME LIKE '%جدة%'",
                 "AMANA_NAME = 'جدة'": "AMANA_NAME LIKE '%جدة%'",
                 "AMANA_NAME IN ('جده')": "AMANA_NAME LIKE '%جدة%'",
                 "AMANA_NAME IN ('جدة')": "AMANA_NAME LIKE '%جدة%'"
             }
             
-            # Administrative level mapping for intelligent error handling
             admin_levels = {
-                # Common confusion: things that are regions, not amanas
                 'regions_not_amanas': [
                     'الرياض', 'مكة المكرمة', 'المنطقة الشرقية', 'عسير', 'المدينة المنورة',
                     'القصيم', 'حائل', 'تبوك', 'الحدود الشمالية', 'جيزان', 'نجران', 'الباحة', 'الجوف'
                 ],
-                # Things that are actually amanas
                 'actual_amanas': [
                     'أمانة منطقة الرياض', 'أمانة العاصمة المقدسة', 'أمانة المدينة المنورة',
                     'أمانة المنطقة الشرقية', 'أمانة منطقة عسير', 'أمانة منطقة القصيم'
                 ],
-                # Things that are baladias/municipalities
                 'baladias': [
                     'بلدية الخبر', 'بلدية الظهران', 'بلدية القطيف', 'بلدية الأحساء',
                     'بلدية الطائف', 'بلدية الخرج', 'بلدية بريدة', 'بلدية عنيزة'
                 ]
             }
             
-            # Check for administrative level confusion in the question
             question_lower = question.lower()
             detected_confusion = None
             suggestions = []
             
-            # Check if user is asking about amana but mentions region names
             if any(term in question_lower for term in ['أمانة', 'امانة']):
                 for region in admin_levels['regions_not_amanas']:
                     if region in question:
                         detected_confusion = f"'{region}' is a region (منطقة), not an Amana (أمانة)"
-                        # Find corresponding amana
                         if region == 'الرياض':
                             suggestions.append("Did you mean 'أمانة منطقة الرياض'?")
                         elif region == 'مكة المكرمة':
@@ -798,7 +743,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                             suggestions.append("Did you mean 'أمانة المنطقة الشرقية'?")
                         break
             
-            # Check if user is asking about region but mentions city names
             if any(term in question_lower for term in ['منطقة', 'مناطق']):
                 cities = ['جدة', 'الدمام', 'الخبر', 'الطائف', 'بريدة']
                 for city in cities:
@@ -812,7 +756,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                             suggestions.append("Did you mean 'منطقة القصيم'?")
                         break
             
-            # Check if user is asking about baladia but mentions amana/region names
             if any(term in question_lower for term in ['بلدية', 'بلديات']):
                 regions = ['الرياض', 'مكة المكرمة', 'المنطقة الشرقية']
                 for region in regions:
@@ -821,7 +764,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                         suggestions.append(f"For municipalities in {region}, try asking about specific cities like الخبر, الظهران, or الدمام")
                         break
             
-            # Check for common spelling mistakes or alternative names
             common_mistakes = {
                 'الشرقيه': 'المنطقة الشرقية',
                 'الشرقية': 'المنطقة الشرقية', 
@@ -831,7 +773,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 'امانة مكة': 'أمانة العاصمة المقدسة'
             }
             
-            # Apply common mistake corrections
             for mistake, correction in common_mistakes.items():
                 if mistake in question:
                     print(f"Debug - Detected common mistake: '{mistake}' → '{correction}'")
@@ -839,7 +780,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     if not detected_confusion:
                         detected_confusion = f"Common alternative name detected"
             
-            # Apply corrections
             original_query = sql_query
             for wrong_name, correct_name in city_name_corrections.items():
                 if wrong_name in sql_query:
@@ -851,61 +791,47 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 print(f"Debug - Original: {original_query}")
                 print(f"Debug - Corrected: {sql_query}")
             
-            # Remove any extra whitespace
             sql_query = ' '.join(sql_query.split())
             sql_query = sql_query.strip()
             
             print(f"Debug - Cleaned SQL query: '{sql_query}'")
             
-            # If the query doesn't start with SELECT, try to fix it
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
-                # Try to extract SELECT from the response
                 select_match = re.search(r'(SELECT\s+.*)', sql_query, re.IGNORECASE | re.DOTALL)
                 if select_match:
                     sql_query = select_match.group(1).strip()
                     print(f"Debug - Extracted SELECT query: '{sql_query}'")
                 else:
-                    # Generate a safe fallback query based on question content
                     question_lower = question.lower()
                     if any(word in question_lower for word in ['total', 'count', 'number', 'how many', 'عدد', 'إجمالي', 'كم']):
                         sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                     else:
-                        # Default to simple count
                         sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                     print(f"Debug - Using fallback query: '{sql_query}'")
             
-            # Additional validation: ensure the query is reasonable
-            if len(sql_query.strip()) < 10:  # Too short to be valid
+            if len(sql_query.strip()) < 10:
                 sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                 print(f"Debug - Query too short, using fallback: '{sql_query}'")
             
-            # Check for obvious issues and fix them
             if 'FROM ' not in sql_query.upper():
                 sql_query = f"SELECT COUNT(*) as total_count FROM {self.main_table}"
                 print(f"Debug - No FROM clause, using fallback: '{sql_query}'")
             
-            # Validate that only actual columns from the schema are used
             if column_names:
                 query_upper = sql_query.upper()
-                # Split query into tokens more intelligently
-                # Use regex to properly tokenize SQL, preserving function calls
                 tokens = re.findall(r'\b\w+\b', sql_query)
                 
                 print(f"Debug - SQL tokens to validate: {tokens}")
                 
-                # Check for invalid column references
                 for token in tokens:
-                    # Skip SQL keywords, functions, operators, and table names
                     sql_keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 
                                   'AS', 'AND', 'OR', 'DESC', 'ASC', 'HAVING', 'DISTINCT', 'TOP', 'LIMIT', 'ROWNUM',
                                   'AI_USER', 'COMMERCIAL_LICENSE_MV']
                     
-                    # Oracle-specific functions and keywords
                     oracle_functions = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'NVL', 'NVL2', 'DECODE', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
                                        'SUBSTR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM', 'ROUND', 'TRUNC', 'CEIL', 'FLOOR',
                                        'EXTRACT', 'SYSDATE', 'SYSTIMESTAMP', 'ADD_MONTHS', 'MONTHS_BETWEEN']
                     
-                    # Date format patterns
                     date_formats = ['YYYY', 'MM', 'DD', 'HH24', 'MI', 'SS', 'MON', 'MONTH', 'DY', 'DAY']
                     
                     if (token.upper() in sql_keywords or 
@@ -914,28 +840,24 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                         token in column_names or
                         token.isdigit() or 
                         len(token) <= 2 or
-                        token.startswith('license_') or  # Allow aliases like license_count
-                        token.startswith('total_') or   # Allow aliases like total_count
-                        token.startswith('issue_') or   # Allow aliases like issue_month
-                        token.endswith('_count') or    # Allow any count aliases
-                        token.endswith('_sum') or      # Allow sum aliases
-                        token.endswith('_avg') or      # Allow avg aliases
-                        token.endswith('_month') or    # Allow month aliases
-                        token.endswith('_year') or     # Allow year aliases
-                        token.endswith('_date')):      # Allow date aliases
+                        token.startswith('license_') or  
+                        token.startswith('total_') or   
+                        token.startswith('issue_') or  
+                        token.endswith('_count') or    
+                        token.endswith('_sum') or      
+                        token.endswith('_avg') or      
+                        token.endswith('_month') or    
+                        token.endswith('_year') or     
+                        token.endswith('_date')):      
                         continue
                     
-                    # If we get here, it might be an invalid column - but be less strict
                     print(f"Debug - Checking potentially invalid token: '{token}'")
                     if token not in column_names:
                         print(f"Debug - Token '{token}' not in columns, but allowing Oracle to validate...")
-                        # Don't immediately fallback - let Oracle handle the validation
-                        # Only fallback for obviously wrong things
                         continue
             
             print(f"Debug - FINAL SQL TO EXECUTE: '{sql_query}'")
             
-            # Validate the query starts with SELECT
             if not sql_query.upper().startswith(('SELECT', 'WITH')):
                 return QueryResponse(
                     success=False,
@@ -946,7 +868,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     error=f"Query must be a SELECT statement. Generated: '{sql_query}'"
                 )
             
-            # Ensure query only references allowed materialized views
             query_lower = sql_query.lower()
             mv_referenced = any(mv.lower() in query_lower for mv in self.materialized_views)
             if not mv_referenced:
@@ -962,14 +883,12 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             print(f"Debug - Final Oracle SQL: {sql_query}")
             
             try:
-                # Use direct Oracle connection for query execution
                 cursor = self.oracle_connection.cursor()
                 print(f"Debug - About to execute query: {sql_query}")
                 
                 cursor.execute(sql_query)
                 print(f"Debug - Query executed successfully!")
                 
-                # Fetch results and convert to DataFrame
                 columns = [desc[0] for desc in cursor.description]
                 print(f"Debug - Result columns: {columns}")
                 
@@ -998,7 +917,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 
                 chart_data = self._format_for_chart(df, detected_chart_type)
                 
-                # Generate insights about the data and chart
                 insights = self._generate_insights(df, detected_chart_type, question)
                 
                 return QueryResponse(
@@ -1036,115 +954,53 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             )
     
     def _generate_insights(self, df: pd.DataFrame, chart_type: str, question: str) -> str:
-        """Generate intelligent AI insights about the data and chart based on actual situation"""
         try:
-            # Handle empty data case
             if df.empty:
-                # Analyze the question to provide specific guidance
                 question_lower = question.lower()
                 
-                # Check for specific place names that might not exist
                 arabic_places = ['الرياض', 'جدة', 'الدمام', 'الخبر', 'الطائف', 'مكة', 'المدينة']
                 found_places = [place for place in arabic_places if place in question]
                 
                 if found_places:
                     return f"لا توجد بيانات متاحة للاستعلام المطلوب. الأماكن المذكورة ({', '.join(found_places)}) قد لا تكون موجودة في قاعدة البيانات أو قد تكون مكتوبة بشكل مختلف. جرب البحث باستخدام أسماء أخرى أو تحقق من الإملاء الصحيح."
                 
-                # Check for activity/business type queries
                 business_keywords = ['نشاط', 'تجارة', 'مطعم', 'محل', 'شركة', 'مكتب']
                 if any(keyword in question for keyword in business_keywords):
                     return "لا توجد بيانات متاحة لهذا النوع من النشاط التجاري. قد يكون النشاط غير مسجل في قاعدة البيانات أو قد يكون مكتوباً بشكل مختلف."
                 
-                # Check for date/time queries
                 time_keywords = ['تاريخ', 'شهر', 'سنة', 'عام', 'فترة']
                 if any(keyword in question for keyword in time_keywords):
                     return "لا توجد بيانات متاحة للفترة الزمنية المطلوبة. قد تكون البيانات غير متوفرة لهذه الفترة أو قد يكون هناك مشكلة في تنسيق التاريخ."
                 
-                # Generic but helpful empty result message
                 return "لا توجد بيانات متاحة للاستعلام المطلوب. تأكد من صحة المعايير المستخدمة في البحث أو جرب استعلاماً أوسع."
             
-            # Handle single value responses with context
-            if len(df) == 1 and len(df.columns) == 1:
-                value = df.iloc[0, 0]
-                col_name = df.columns[0]
-                
-                # Provide context based on column type
-                if 'count' in col_name.lower() or 'total' in col_name.lower():
-                    if isinstance(value, (int, float)) and value > 0:
-                        return f"تم العثور على {value:,} رخصة تجارية في قاعدة البيانات. هذا العدد يمثل إجمالي التراخيص المتاحة للاستعلام المطلوب."
-                    else:
-                        return f"عدد التراخيص التجارية هو {value:,}. هذا العدد منخفض نسبياً وقد يشير إلى محدودية البيانات أو صغر حجم العينة."
-                
-                elif 'date' in col_name.lower() or 'time' in col_name.lower():
-                    return f"التاريخ المطلوب هو {value}. هذا التاريخ يمثل آخر تحديث للبيانات أو الفترة الزمنية المحددة."
-                
-                else:
-                    return f"القيمة المطلوبة هي {value} للعمود {col_name}. هذه البيانات تمثل النتيجة المباشرة للاستعلام."
-            
-            # Handle multiple rows with intelligent analysis
-            if len(df) > 1:
-                # Analyze the data structure
-                numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-                text_cols = df.select_dtypes(include=['object']).columns
-                
-                # Provide insights based on data characteristics
-                insights = []
-                
-                # Geographic analysis
-                if any(col in ['CITY_NAME', 'AMANA_NAME', 'REGION_NMAE', 'BALADIA_NAME'] for col in df.columns):
-                    if len(df) <= 10:
-                        top_location = df.iloc[0, 0] if len(df) > 0 else "غير محدد"
-                        insights.append(f"البيانات تغطي {len(df)} منطقة جغرافية، مع {top_location} في المقدمة.")
-                    else:
-                        insights.append(f"البيانات تغطي {len(df)} منطقة جغرافية مختلفة.")
-                
-                # Business activity analysis
-                if 'D_ACTIVITIES_NAME' in df.columns:
-                    if len(df) <= 10:
-                        top_activity = df.iloc[0, 0] if len(df) > 0 else "غير محدد"
-                        insights.append(f"النشاط التجاري الأكثر شيوعاً هو {top_activity}.")
-                    else:
-                        insights.append(f"البيانات تشمل {len(df)} نوع مختلف من الأنشطة التجارية.")
-                
-                # License status analysis
-                if 'LIC_STATUS' in df.columns:
-                    active_licenses = df[df['LIC_STATUS'].str.contains('نشط|فعال|مفعل', case=False, na=False)]
-                    if len(active_licenses) > 0:
-                        insights.append(f"عدد التراخيص النشطة: {len(active_licenses)} من أصل {len(df)}.")
-                
-                # Temporal analysis
-                if any(col in ['ISSUE_DATE', 'G_ISSUE_DATE', 'EXPIRATION_DATE'] for col in df.columns):
-                    insights.append("البيانات تشمل معلومات زمنية عن إصدار وانتهاء صلاحية التراخيص.")
-                
-                # Statistical insights
-                if len(numeric_cols) > 0:
-                    for col in numeric_cols[:1]:  # Focus on first numeric column
-                        total = df[col].sum()
-                        avg = df[col].mean()
-                        max_val = df[col].max()
-                        min_val = df[col].min()
-                        
-                        if 'count' in col.lower() or 'total' in col.lower():
-                            insights.append(f"إجمالي التراخيص: {total:,}، بمتوسط {avg:.1f} لكل فئة.")
-                        else:
-                            insights.append(f"القيم تتراوح من {min_val:,} إلى {max_val:,}، بمتوسط {avg:.1f}.")
-                
-                # Chart-specific insights
-                if chart_type == "pie":
-                    insights.append("الرسم البياني الدائري يوضح توزيع البيانات بشكل واضح.")
-                elif chart_type == "bar":
-                    insights.append("الرسم البياني العمودي يظهر المقارنة بين الفئات المختلفة.")
-                elif chart_type == "line":
-                    insights.append("الرسم البياني الخطي يوضح الاتجاهات الزمنية للبيانات.")
-                
-                return " ".join(insights) if insights else f"تم العثور على {len(df)} سجل في قاعدة البيانات."
-            
-            # Handle complex data (multiple columns)
-            if len(df.columns) > 2:
-                return f"البيانات تحتوي على {len(df)} سجل مع {len(df.columns)} عمود مختلف. هذه البيانات متعددة الأبعاد وتوفر رؤية شاملة للتراخيص التجارية."
-            
-            # Default fallback
-            return f"تم تحليل البيانات بنجاح. النتائج تحتوي على {len(df)} سجل."
+            insights_prompt = f"""Based on the commercial licensing data analysis, provide intelligent and contextual insights about the results:
+
+Question Asked: {question}
+Chart Type: {chart_type}
+Data Shape: {len(df)} rows, {len(df.columns)} columns
+
+Data Summary:
+{df.head(10).to_string()}
+
+Data Types:
+{df.dtypes.to_string()}
+
+Statistical Summary:
+{df.describe().to_string() if len(df.select_dtypes(include=['int64', 'float64']).columns) > 0 else 'No numeric columns'}
+
+Provide intelligent insights that include:
+1. Contextual interpretation of the data based on the question
+2. Business implications and significance
+3. Key patterns or trends identified
+4. Geographic or temporal analysis if relevant
+5. License distribution insights
+6. Recommendations or observations
+
+Keep the response concise (2-3 sentences) and focus on actionable insights. Use both Arabic and English terms when appropriate. Provide meaningful business intelligence rather than just data description."""
+
+            insights_response = self.llm.invoke(insights_prompt)
+            return insights_response.content.strip()
             
         except Exception as e:
             if df.empty:
@@ -1152,19 +1008,15 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             return f"تم العثور على {len(df)} سجل في قاعدة البيانات. البيانات جاهزة للتحليل والعرض."
     
     def get_table_schema(self, table_name: str) -> str:
-        """Get detailed schema information for a specific Oracle materialized view"""
         try:
-            # Try LangChain method first if available
             if self.db:
                 return self.db.get_table_info_no_throw([table_name])
         except:
             pass
         
         try:
-            # Use direct Oracle connection for schema query
             cursor = self.oracle_connection.cursor()
             
-            # Parse schema and table name from full name (e.g., AI_USER.COMMERCIAL_LICENSE_MV)
             if '.' in table_name:
                 schema, table = table_name.split('.', 1)
             else:
@@ -1173,7 +1025,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             
             print(f"Debug - Querying schema for: schema='{schema}', table='{table}'")
             
-            # Use simpler query without bind variables to avoid ORA-01745
             schema_query = f"""
                 SELECT 
                     COLUMN_NAME,
@@ -1201,7 +1052,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             
             schema_info = f"Materialized View: {table_name}\nColumns:\n"
             for col_name, data_type, data_length, data_precision, data_scale, nullable, default in columns:
-                # Format data type with length/precision
                 if data_type in ['VARCHAR2', 'CHAR'] and data_length:
                     type_info = f"{data_type}({data_length})"
                 elif data_type == 'NUMBER' and data_precision:
@@ -1216,7 +1066,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 default_info = f" DEFAULT {default}" if default else ""
                 schema_info += f"  - {col_name}: {type_info} {nullable_info}{default_info}\n"
             
-            # Add row count information
             try:
                 cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
                 row_count = cursor.fetchone()[0]
@@ -1234,7 +1083,6 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             return f"Materialized View: {table_name}\nError getting schema: {str(e)}"
     
     def get_database_info(self) -> Dict[str, Any]:
-        """Get information about all available materialized views"""
         tables = self.materialized_views
         table_schemas = {}
         
@@ -1251,16 +1099,13 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
         }
     
     def test_oracle_connection(self) -> bool:
-        """Test Oracle database connection and materialized view access"""
         try:
             cursor = self.oracle_connection.cursor()
             
-            # Test basic connection
             cursor.execute("SELECT SYSDATE FROM DUAL")
             sysdate = cursor.fetchone()
             print(f"✅ Oracle connection successful. Current time: {sysdate[0]}")
             
-            # Test each materialized view
             for mv_name in self.materialized_views:
                 try:
                     cursor.execute(f"SELECT COUNT(*) FROM {mv_name}")
