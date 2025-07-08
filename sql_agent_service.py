@@ -1034,73 +1034,120 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
             )
     
     def _generate_insights(self, df: pd.DataFrame, chart_type: str, question: str) -> str:
-        """Generate AI insights about the data and chart"""
+        """Generate intelligent AI insights about the data and chart based on actual situation"""
         try:
             # Handle empty data case
             if df.empty:
-                return "No data available for this question. The query executed successfully but found no records matching the specified criteria in the database."
+                # Analyze the question to provide specific guidance
+                question_lower = question.lower()
+                
+                # Check for specific place names that might not exist
+                arabic_places = ['الرياض', 'جدة', 'الدمام', 'الخبر', 'الطائف', 'مكة', 'المدينة']
+                found_places = [place for place in arabic_places if place in question]
+                
+                if found_places:
+                    return f"لا توجد بيانات متاحة للاستعلام المطلوب. الأماكن المذكورة ({', '.join(found_places)}) قد لا تكون موجودة في قاعدة البيانات أو قد تكون مكتوبة بشكل مختلف. جرب البحث باستخدام أسماء أخرى أو تحقق من الإملاء الصحيح."
+                
+                # Check for activity/business type queries
+                business_keywords = ['نشاط', 'تجارة', 'مطعم', 'محل', 'شركة', 'مكتب']
+                if any(keyword in question for keyword in business_keywords):
+                    return "لا توجد بيانات متاحة لهذا النوع من النشاط التجاري. قد يكون النشاط غير مسجل في قاعدة البيانات أو قد يكون مكتوباً بشكل مختلف."
+                
+                # Check for date/time queries
+                time_keywords = ['تاريخ', 'شهر', 'سنة', 'عام', 'فترة']
+                if any(keyword in question for keyword in time_keywords):
+                    return "لا توجد بيانات متاحة للفترة الزمنية المطلوبة. قد تكون البيانات غير متوفرة لهذه الفترة أو قد يكون هناك مشكلة في تنسيق التاريخ."
+                
+                # Generic but helpful empty result message
+                return "لا توجد بيانات متاحة للاستعلام المطلوب. تأكد من صحة المعايير المستخدمة في البحث أو جرب استعلاماً أوسع."
             
-            # Prepare data summary for insights
-            data_summary = f"Data contains {len(df)} records with {len(df.columns)} columns. "
-            
-            # Add statistical insights
-            numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-            if len(numeric_cols) > 0:
-                for col in numeric_cols:
-                    total = df[col].sum()
-                    avg = df[col].mean()
-                    max_val = df[col].max()
-                    min_val = df[col].min()
-                    data_summary += f"{col}: Total={total:,.0f}, Average={avg:,.1f}, Max={max_val:,.0f}, Min={min_val:,.0f}. "
-            
-            # Add top categories if available
-            text_cols = df.select_dtypes(include=['object']).columns
-            if len(text_cols) > 0 and len(numeric_cols) > 0:
-                for text_col in text_cols[:1]:  # Just first text column
-                    if len(df) > 1:
-                        top_category = df.loc[df[numeric_cols[0]].idxmax(), text_col]
-                        top_value = df[numeric_cols[0]].max()
-                        data_summary += f"Highest value: {top_category} with {top_value:,.0f}. "
-            
-            # Handle single value responses (no chart needed)
-            if chart_type == "none" and len(df) == 1 and len(df.columns) == 1:
+            # Handle single value responses with context
+            if len(df) == 1 and len(df.columns) == 1:
                 value = df.iloc[0, 0]
                 col_name = df.columns[0]
-                if isinstance(value, (int, float)):
-                    return f"The result is {value:,} for {col_name}. This represents the total count or value for your query about the commercial licensing data."
+                
+                # Provide context based on column type
+                if 'count' in col_name.lower() or 'total' in col_name.lower():
+                    if isinstance(value, (int, float)) and value > 0:
+                        return f"تم العثور على {value:,} رخصة تجارية في قاعدة البيانات. هذا العدد يمثل إجمالي التراخيص المتاحة للاستعلام المطلوب."
+                    else:
+                        return f"عدد التراخيص التجارية هو {value:,}. هذا العدد منخفض نسبياً وقد يشير إلى محدودية البيانات أو صغر حجم العينة."
+                
+                elif 'date' in col_name.lower() or 'time' in col_name.lower():
+                    return f"التاريخ المطلوب هو {value}. هذا التاريخ يمثل آخر تحديث للبيانات أو الفترة الزمنية المحددة."
+                
                 else:
-                    return f"The result is {value} for {col_name}."
+                    return f"القيمة المطلوبة هي {value} للعمود {col_name}. هذه البيانات تمثل النتيجة المباشرة للاستعلام."
             
-            # Handle insight type for single values (legacy support)
-            if chart_type == "insight" and len(df) == 1 and len(df.columns) == 1:
-                value = df.iloc[0, 0]
-                col_name = df.columns[0]
-                return f"The result is {value:,} for {col_name}. This represents the total count or value for your query about the commercial licensing data."
+            # Handle multiple rows with intelligent analysis
+            if len(df) > 1:
+                # Analyze the data structure
+                numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+                text_cols = df.select_dtypes(include=['object']).columns
+                
+                # Provide insights based on data characteristics
+                insights = []
+                
+                # Geographic analysis
+                if any(col in ['CITY_NAME', 'AMANA_NAME', 'REGION_NMAE', 'BALADIA_NAME'] for col in df.columns):
+                    if len(df) <= 10:
+                        top_location = df.iloc[0, 0] if len(df) > 0 else "غير محدد"
+                        insights.append(f"البيانات تغطي {len(df)} منطقة جغرافية، مع {top_location} في المقدمة.")
+                    else:
+                        insights.append(f"البيانات تغطي {len(df)} منطقة جغرافية مختلفة.")
+                
+                # Business activity analysis
+                if 'D_ACTIVITIES_NAME' in df.columns:
+                    if len(df) <= 10:
+                        top_activity = df.iloc[0, 0] if len(df) > 0 else "غير محدد"
+                        insights.append(f"النشاط التجاري الأكثر شيوعاً هو {top_activity}.")
+                    else:
+                        insights.append(f"البيانات تشمل {len(df)} نوع مختلف من الأنشطة التجارية.")
+                
+                # License status analysis
+                if 'LIC_STATUS' in df.columns:
+                    active_licenses = df[df['LIC_STATUS'].str.contains('نشط|فعال|مفعل', case=False, na=False)]
+                    if len(active_licenses) > 0:
+                        insights.append(f"عدد التراخيص النشطة: {len(active_licenses)} من أصل {len(df)}.")
+                
+                # Temporal analysis
+                if any(col in ['ISSUE_DATE', 'G_ISSUE_DATE', 'EXPIRATION_DATE'] for col in df.columns):
+                    insights.append("البيانات تشمل معلومات زمنية عن إصدار وانتهاء صلاحية التراخيص.")
+                
+                # Statistical insights
+                if len(numeric_cols) > 0:
+                    for col in numeric_cols[:1]:  # Focus on first numeric column
+                        total = df[col].sum()
+                        avg = df[col].mean()
+                        max_val = df[col].max()
+                        min_val = df[col].min()
+                        
+                        if 'count' in col.lower() or 'total' in col.lower():
+                            insights.append(f"إجمالي التراخيص: {total:,}، بمتوسط {avg:.1f} لكل فئة.")
+                        else:
+                            insights.append(f"القيم تتراوح من {min_val:,} إلى {max_val:,}، بمتوسط {avg:.1f}.")
+                
+                # Chart-specific insights
+                if chart_type == "pie":
+                    insights.append("الرسم البياني الدائري يوضح توزيع البيانات بشكل واضح.")
+                elif chart_type == "bar":
+                    insights.append("الرسم البياني العمودي يظهر المقارنة بين الفئات المختلفة.")
+                elif chart_type == "line":
+                    insights.append("الرسم البياني الخطي يوضح الاتجاهات الزمنية للبيانات.")
+                
+                return " ".join(insights) if insights else f"تم العثور على {len(df)} سجل في قاعدة البيانات."
             
-            insights_prompt = f"""Based on the commercial licensing data analysis, provide concise and meaningful insights about the results:
-
-Question Asked: {question}
-Chart Type: {chart_type}
-Data Summary: {data_summary}
-
-Sample Data (first 3 rows):
-{df.head(3).to_string()}
-
-Provide insights that include:
-1. Key findings from the data
-2. Notable patterns or trends
-3. Business implications
-4. Chart interpretation guidance
-
-Keep the response concise (2-3 sentences) and focus on actionable insights. Use both Arabic and English terms when appropriate."""
-
-            insights_response = self.llm.invoke(insights_prompt)
-            return insights_response.content.strip()
+            # Handle complex data (multiple columns)
+            if len(df.columns) > 2:
+                return f"البيانات تحتوي على {len(df)} سجل مع {len(df.columns)} عمود مختلف. هذه البيانات متعددة الأبعاد وتوفر رؤية شاملة للتراخيص التجارية."
+            
+            # Default fallback
+            return f"تم تحليل البيانات بنجاح. النتائج تحتوي على {len(df)} سجل."
             
         except Exception as e:
             if df.empty:
-                return "No data available for this question. The query executed successfully but found no records matching the specified criteria in the database."
-            return f"Data shows {len(df)} records. Chart type '{chart_type}' is suitable for visualizing this data distribution."
+                return "لا توجد بيانات متاحة للاستعلام المطلوب. تأكد من صحة المعايير المستخدمة في البحث."
+            return f"تم العثور على {len(df)} سجل في قاعدة البيانات. البيانات جاهزة للتحليل والعرض."
     
     def get_table_schema(self, table_name: str) -> str:
         """Get detailed schema information for a specific Oracle materialized view"""
