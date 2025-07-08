@@ -196,9 +196,7 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
         
         # Single value responses - no chart needed
         if len(df.columns) == 1 and len(df) == 1:
-            count_keywords = ['count', 'total', 'number', 'how many', 'عدد', 'إجمالي', 'كم', 'مجموع']
-            if any(word in question_lower for word in count_keywords):
-                return "none"  # No chart needed for single values
+            return "none"  # No chart needed for single values
         
         # Single column with single row - usually a summary statistic
         if len(df.columns) == 1 and len(df) == 1:
