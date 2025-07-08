@@ -198,6 +198,10 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
         if len(df.columns) == 1 and len(df) == 1:
             return "none"  # No chart needed for single values
         
+        # Single value with 2 columns (label + value) - no chart needed
+        if len(df.columns) == 2 and len(df) == 1:
+            return "none"  # No chart needed for single values
+        
         # Single column with single row - usually a summary statistic
         if len(df.columns) == 1 and len(df) == 1:
             return "none"
