@@ -380,6 +380,10 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     else:
                         detected_chart_type = chart_type
                     
+                    # Force chart_type to 'none' if only one value (1 row, 1 or 2 columns)
+                    if (len(df) == 1 and (len(df.columns) == 1 or len(df.columns) == 2)):
+                        detected_chart_type = "none"
+
                     chart_data = self._format_for_chart(df, detected_chart_type)
                     insights = self._generate_insights(df, detected_chart_type, question)
                     
@@ -923,6 +927,10 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                 else:
                     detected_chart_type = chart_type
                 
+                # Force chart_type to 'none' if only one value (1 row, 1 or 2 columns)
+                if (len(df) == 1 and (len(df.columns) == 1 or len(df.columns) == 2)):
+                    detected_chart_type = "none"
+
                 chart_data = self._format_for_chart(df, detected_chart_type)
                 
                 insights = self._generate_insights(df, detected_chart_type, question)
