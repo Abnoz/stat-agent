@@ -184,10 +184,14 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
     def _detect_chart_type(self, df: pd.DataFrame, question: str) -> str:
         question_lower = question.lower()
         
+        print(f"Debug - Chart detection: df shape {df.shape}, columns {df.columns.tolist()}")
+        
         if len(df.columns) == 1 and len(df) == 1:
+            print(f"Debug - Single value detected: 1 column, 1 row")
             return "none"
         
         if len(df.columns) == 2 and len(df) == 1:
+            print(f"Debug - Single value detected: 2 columns, 1 row")
             return "none"
         
         if len(df.columns) == 1:
@@ -1072,14 +1076,6 @@ Keep the response concise (2-3 sentences) and focus on actionable insights. Use 
                 nullable_info = "NULL" if nullable == "Y" else "NOT NULL"
                 default_info = f" DEFAULT {default}" if default else ""
                 schema_info += f"  - {col_name}: {type_info} {nullable_info}{default_info}\n"
-            
-            try:
-                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-                row_count = cursor.fetchone()[0]
-                schema_info += f"\nRow Count: {row_count:,}\n"
-            except Exception as count_error:
-                print(f"Debug - Could not get row count: {count_error}")
-                schema_info += f"\nRow Count: Unable to retrieve\n"
             
             cursor.close()
             print(f"Debug - Schema info successfully retrieved")
