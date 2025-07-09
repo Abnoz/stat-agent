@@ -12,7 +12,8 @@ from schemas import (
     ErrorResponse,
     ChartDataPoint,
     TimeSeriesDataPoint,
-    TableData
+    TableData,
+    JobStatusResponse
 )
 from config import Config
 
@@ -93,6 +94,43 @@ async def get_database_tables(service: SQLAgentService = Depends(get_sql_service
         logger.error(f"Failed to get database tables: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/insights/{job_id}", response_model=JobStatusResponse, tags=["Insights"])
+async def get_insights_by_job_id(
+    job_id: str,
+    service: SQLAgentService = Depends(get_sql_service)
+):
+    try:
+        job_status = service.get_job_status(job_id)
+        
+        if 'error' in job_status:
+            raise HTTPException(status_code=404, detail=job_status['error'])
+        
+        return JobStatusResponse(**job_status)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get job status for {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/insights", tags=["Insights"])
+async def get_all_jobs(service: SQLAgentService = Depends(get_sql_service)):
+    try:
+        # This would return all active jobs (for admin purposes)
+        # For now, just return a message
+        return {"message": "Use /insights/{job_id} to get specific job status"}
+    except Exception as e:
+        logger.error(f"Failed to get jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/insights/cleanup", tags=["Insights"])
+async def cleanup_old_jobs(service: SQLAgentService = Depends(get_sql_service)):
+    try:
+        service.cleanup_old_jobs()
+        return {"message": "Old jobs cleaned up successfully"}
+    except Exception as e:
+        logger.error(f"Failed to cleanup jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/examples", tags=["Examples"])
 async def get_example_queries():
     return {
@@ -145,6 +183,11 @@ async def get_example_queries():
             "pie": "Pie chart for proportions and distributions",
             "table": "Table format for detailed data display",
             "none": "No chart - just return the raw data"
+        },
+        "workflow": {
+            "step1": "POST /query with your question to get chart data and job_id",
+            "step2": "GET /insights/{job_id} to check status and get insights when ready",
+            "note": "Insights are generated in the background to avoid blocking the chart response"
         }
     }
 

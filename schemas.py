@@ -24,10 +24,21 @@ class QueryResponse(BaseModel):
     success: bool = Field(..., description="Whether the query was successful")
     data: Optional[Union[List[ChartDataPoint], List[TimeSeriesDataPoint], TableData]] = Field(None, description="Chart-ready data")
     chart_type: str = Field(..., description="Recommended chart type")
-    insights: Optional[str] = Field(None, description="AI-generated insights about the data and chart")
-    related_analysis: Optional[List[str]] = Field(None, description="Suggested follow-up questions for deeper analysis")
+    job_id: Optional[str] = Field(None, description="Background job ID for insights generation")
     message: str = Field(..., description="Response message")
     error: Optional[str] = Field(None, description="Error message if any")
+
+class JobStatusResponse(BaseModel):
+    job_id: str = Field(..., description="Background job ID")
+    status: str = Field(..., description="Job status: pending, processing, completed, failed")
+    created_at: datetime = Field(..., description="When the job was created")
+    completed_at: Optional[datetime] = Field(None, description="When the job was completed")
+    question: str = Field(..., description="Original question")
+    chart_type: str = Field(..., description="Chart type used")
+    data_shape: str = Field(..., description="Data shape information")
+    insights: Optional[str] = Field(None, description="AI-generated insights about the data")
+    related_analysis: Optional[List[str]] = Field(None, description="Suggested follow-up questions for deeper analysis")
+    error: Optional[str] = Field(None, description="Error message if job failed")
 
 class DatabaseInfo(BaseModel):
     tables: List[str] = Field(..., description="Available table names")
