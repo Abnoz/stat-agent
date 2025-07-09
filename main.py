@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
+import time
 from sql_agent_service import SQLAgentService
 from schemas import (
     QueryRequest, 
@@ -35,8 +36,8 @@ async def lifespan(app: FastAPI):
         sql_service = None
 
 app = FastAPI(
-    title="Commercial Licensing Data Analysis API",
-    description="AI-powered commercial licensing data analysis API that generates insights and chart-ready data from commercial license databases",
+    title="SQL Agent API",
+    description="Natural language to SQL query conversion with chart-ready data output",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -49,59 +50,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_sql_service():
+def get_sql_service() -> SQLAgentService:
     if sql_service is None:
-        raise HTTPException(status_code=503, detail="SQL Agent Service is not available")
+        raise HTTPException(status_code=503, detail="SQL Agent Service not initialized")
     return sql_service
-
-@app.get("/", tags=["Health"])
-async def root():
-    return {
-        "message": "Commercial Licensing Data Analysis API",
-        "status": "active",
-        "version": "1.0.0",
-        "description": "AI-powered analysis of commercial licensing data"
-    }
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    try:
-        service = get_sql_service()
-        return {"status": "healthy", "database_connected": True}
-    except Exception:
-        return {"status": "unhealthy", "database_connected": False}
+    return {"status": "healthy", "timestamp": time.time()}
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
 async def execute_query(
     request: QueryRequest,
     service: SQLAgentService = Depends(get_sql_service)
 ):
+    start_time = time.time()
     try:
+        logger.info(f"Processing query: {request.question}")
         result = await service.query(request.question, request.chart_type)
+        processing_time = time.time() - start_time
+        logger.info(f"Query completed in {processing_time:.2f}s")
         return result
     except Exception as e:
-        logger.error(f"Query execution failed: {str(e)}")
+        processing_time = time.time() - start_time
+        logger.error(f"Query execution failed after {processing_time:.2f}s: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/database/info", response_model=DatabaseInfo, tags=["Database"])
 async def get_database_info(service: SQLAgentService = Depends(get_sql_service)):
     try:
         info = service.get_database_info()
-        return DatabaseInfo(
-            tables=info["tables"],
-            table_schemas=info["table_schemas"]
-        )
+        return DatabaseInfo(**info)
     except Exception as e:
         logger.error(f"Failed to get database info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/database/tables", tags=["Database"])
-async def get_tables(service: SQLAgentService = Depends(get_sql_service)):
+async def get_database_tables(service: SQLAgentService = Depends(get_sql_service)):
     try:
-        info = service.get_database_info()
-        return {"tables": info["tables"]}
+        return {"tables": service.materialized_views}
     except Exception as e:
-        logger.error(f"Failed to get tables: {str(e)}")
+        logger.error(f"Failed to get database tables: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/examples", tags=["Examples"])
@@ -149,27 +138,24 @@ async def get_example_queries():
                 "description": "Quarterly business formation analysis"
             }
         ],
-        "chart_types": ["auto", "bar", "line", "pie", "table"],
-        "data_focus": "Commercial licensing data including business types, license statuses, fees, geographic distribution, and temporal patterns"
+        "chart_types": {
+            "auto": "Automatically detect the best chart type based on data and question",
+            "bar": "Bar chart for comparisons and rankings",
+            "line": "Line chart for time series and trends",
+            "pie": "Pie chart for proportions and distributions",
+            "table": "Table format for detailed data display",
+            "none": "No chart - just return the raw data"
+        }
     }
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.error(f"Global exception: {str(exc)}")
+    logger.error(f"Unhandled exception: {str(exc)}")
     return JSONResponse(
         status_code=500,
-        content=ErrorResponse(
-            error=str(exc),
-            message="An unexpected error occurred"
-        ).dict()
+        content={"detail": "Internal server error", "error": str(exc)}
     )
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    ) 
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
