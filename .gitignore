@@ -160,7 +160,6 @@ cython_debug/
 .idea/
 
 # VSCode
-.vscode/
 *.code-workspace
 
 # Sublime Text
@@ -257,3 +256,6 @@ coverage.xml
 Icon?
 .Spotlight-V100
 .Trashes 
+temp_auto_push.bat
+temp_interactive_push.bat
+branch_structure.json

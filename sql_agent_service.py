@@ -15,6 +15,9 @@ from sqlalchemy.sql import text
 import oracledb
 import time
 import asyncio
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
@@ -48,6 +51,12 @@ class SQLAgentService:
         self._place_categories = self._load_place_categories()
         self._query_cache = {}  # Simple cache for frequently asked questions
         self._cache_max_size = 100  # Limit cache size
+        self._disable_async_llm = os.getenv('DISABLE_ASYNC_LLM', 'false').lower() == 'true'  # Debug flag
+        
+        # Background job system for insights generation
+        self._background_jobs = {}  # Store job results by ID
+        self._job_executor = ThreadPoolExecutor(max_workers=2)  # Background thread pool
+        self._job_lock = threading.Lock()  # Thread safety for job storage
         
         self._setup_oracle_connection()
         self._setup_database_connection()
@@ -862,11 +871,10 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
 
                 chart_data = self._format_for_chart(df, detected_chart_type)
                 
-                # Generate insights and related analysis in parallel
-                insights_task = asyncio.create_task(self._generate_insights_async(df, detected_chart_type, question))
-                related_task = asyncio.create_task(self._generate_related_analysis_async(df, question, schema_info))
+                print(f"Debug - Chart data formatted, creating background job for insights...")
                 
-                insights, related_analysis = await asyncio.gather(insights_task, related_task)
+                # Create background job for insights generation
+                job_id = self._create_background_job(df, detected_chart_type, question, schema_info)
                 
                 performance_log['total_time'] = time.time() - start_time
                 print(f"⚡ Performance: {performance_log}")
@@ -875,9 +883,8 @@ OUTPUT ONLY THE SQL - NO OTHER TEXT:"""
                     success=True,
                     data=chart_data,
                     chart_type=detected_chart_type,
-                    insights=insights,
-                    related_analysis=related_analysis,
-                    message="Query executed successfully",
+                    job_id=job_id,
+                    message="Query executed successfully. Insights are being generated in the background.",
                     error=None
                 )
                 
@@ -1150,3 +1157,135 @@ Return only the questions, one per line, without numbering or additional text.""
                 "ما هو متوسط عدد التراخيص لكل منطقة؟",
                 "كيف يتوزع النشاط التجاري حسب البلدية؟"
             ]
+    
+    def _create_background_job(self, df: pd.DataFrame, chart_type: str, question: str, schema_info: str) -> str:
+        """Create a background job for insights generation and return job ID"""
+        job_id = str(uuid.uuid4())
+        
+        with self._job_lock:
+            self._background_jobs[job_id] = {
+                'status': 'pending',
+                'created_at': datetime.now(),
+                'question': question,
+                'chart_type': chart_type,
+                'data_shape': f"{len(df)} rows, {len(df.columns)} columns"
+            }
+        
+        # Submit background job
+        self._job_executor.submit(self._run_background_job, job_id, df, chart_type, question, schema_info)
+        
+        return job_id
+    
+    def _run_background_job(self, job_id: str, df: pd.DataFrame, chart_type: str, question: str, schema_info: str):
+        """Run the background job to generate insights and related analysis"""
+        try:
+            with self._job_lock:
+                self._background_jobs[job_id]['status'] = 'processing'
+            
+            # Generate insights
+            insights = self._generate_insights_sync(df, chart_type, question)
+            
+            # Generate related analysis
+            related_analysis = self._generate_related_analysis(df, question, schema_info)
+            
+            # Store results
+            with self._job_lock:
+                self._background_jobs[job_id].update({
+                    'status': 'completed',
+                    'completed_at': datetime.now(),
+                    'insights': insights,
+                    'related_analysis': related_analysis
+                })
+                
+        except Exception as e:
+            with self._job_lock:
+                self._background_jobs[job_id].update({
+                    'status': 'failed',
+                    'completed_at': datetime.now(),
+                    'error': str(e),
+                    'insights': "تم العثور على البيانات المطلوبة. البيانات جاهزة للتحليل والعرض.",
+                    'related_analysis': [
+                        "ما هو توزيع التراخيص التجارية حسب النشاط؟",
+                        "أي مدينة لديها أكبر عدد من التراخيص النشطة؟",
+                        "ما هو متوسط عدد التراخيص لكل منطقة؟",
+                        "كيف يتوزع النشاط التجاري حسب البلدية؟"
+                    ]
+                })
+    
+    def _generate_insights_sync(self, df: pd.DataFrame, chart_type: str, question: str) -> str:
+        """Synchronous version of insights generation for background jobs"""
+        try:
+            if df.empty:
+                question_lower = question.lower()
+                
+                arabic_places = ['الرياض', 'جدة', 'الدمام', 'الخبر', 'الطائف', 'مكة', 'المدينة']
+                found_places = [place for place in arabic_places if place in question]
+                
+                if found_places:
+                    return f"لا توجد بيانات متاحة للاستعلام المطلوب. الأماكن المذكورة ({', '.join(found_places)}) قد لا تكون موجودة في قاعدة البيانات أو قد تكون مكتوبة بشكل مختلف. جرب البحث باستخدام أسماء أخرى أو تحقق من الإملاء الصحيح."
+                
+                business_keywords = ['نشاط', 'تجارة', 'مطعم', 'محل', 'شركة', 'مكتب']
+                if any(keyword in question for keyword in business_keywords):
+                    return "لا توجد بيانات متاحة لهذا النوع من النشاط التجاري. قد يكون النشاط غير مسجل في قاعدة البيانات أو قد يكون مكتوباً بشكل مختلف."
+                
+                time_keywords = ['تاريخ', 'شهر', 'سنة', 'عام', 'فترة']
+                if any(keyword in question for keyword in time_keywords):
+                    return "لا توجد بيانات متاحة للفترة الزمنية المطلوبة. قد تكون البيانات غير متوفرة لهذه الفترة أو قد يكون هناك مشكلة في تنسيق التاريخ."
+                
+                return "لا توجد بيانات متاحة للاستعلام المطلوب. تأكد من صحة المعايير المستخدمة في البحث أو جرب استعلاماً أوسع."
+            
+            insights_prompt = f"""Based on the commercial licensing data analysis, provide intelligent and contextual insights about the results:
+
+Question Asked: {question}
+Chart Type: {chart_type}
+Data Shape: {len(df)} rows, {len(df.columns)} columns
+
+Data Summary:
+{df.head(10).to_string()}
+
+Data Types:
+{df.dtypes.to_string()}
+
+Statistical Summary:
+{df.describe().to_string() if len(df.select_dtypes(include=['int64', 'float64']).columns) > 0 else 'No numeric columns'}
+
+Provide intelligent insights that include:
+1. Contextual interpretation of the data based on the question
+2. Business implications and significance
+3. Key patterns or trends identified
+4. Geographic or temporal analysis if relevant
+5. License distribution insights
+6. Recommendations or observations
+
+Keep the response concise (2-3 sentences) and focus on actionable insights. Use only Arabic . Provide meaningful business intelligence rather than just data description."""
+
+            insights_response = self.llm.invoke(insights_prompt)
+            return insights_response.content.strip()
+            
+        except Exception as e:
+            if df.empty:
+                return "لا توجد بيانات متاحة للاستعلام المطلوب. تأكد من صحة المعايير المستخدمة في البحث."
+            return f"تم العثور على {len(df)} سجل في قاعدة البيانات. البيانات جاهزة للتحليل والعرض."
+    
+    def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """Get the status and results of a background job"""
+        with self._job_lock:
+            job = self._background_jobs.get(job_id)
+            
+        if not job:
+            return {'error': 'Job not found'}
+        
+        return job
+    
+    def cleanup_old_jobs(self, max_age_hours: int = 24):
+        """Clean up old completed jobs to prevent memory leaks"""
+        cutoff_time = datetime.now() - pd.Timedelta(hours=max_age_hours)
+        
+        with self._job_lock:
+            jobs_to_remove = []
+            for job_id, job in self._background_jobs.items():
+                if job.get('status') in ['completed', 'failed'] and job.get('completed_at', datetime.now()) < cutoff_time:
+                    jobs_to_remove.append(job_id)
+            
+            for job_id in jobs_to_remove:
+                del self._background_jobs[job_id]
